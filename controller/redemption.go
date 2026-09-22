@@ -134,6 +134,43 @@ func AddRedemption(c *gin.Context) {
 	return
 }
 
+type AddSubscriptionRedemptionRequest struct {
+	Name      string `json:"name" binding:"required"`
+	Count     int    `json:"count" binding:"required,min=1,max=100"`
+	PlanID    int    `json:"plan_id" binding:"required,gt=0"`
+	Kind      string `json:"kind" binding:"required"`
+	ExpiredTime int64 `json:"expired_time"`
+}
+
+// AddSubscriptionRedemption creates cards bound to one validated V1 plan.
+// It is separate from wallet card creation so the two card types cannot mix.
+func AddSubscriptionRedemption(c *gin.Context) {
+	var req AddSubscriptionRedemptionRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		common.ApiErrorMsg(c, "订阅卡参数无效")
+		return
+	}
+	if valid, msg := validateExpiredTime(c, req.ExpiredTime); !valid {
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": msg})
+		return
+	}
+	keys := make([]string, 0, req.Count)
+	for i := 0; i < req.Count; i++ {
+		card, err := model.NewSubscriptionRedemption(req.Kind, req.PlanID, model.SubscriptionV1ChannelID, model.SubscriptionV1Model, req.Name, req.ExpiredTime)
+		if err != nil {
+			common.ApiErrorMsg(c, "订阅卡参数无效")
+			return
+		}
+		if err := card.Insert(); err != nil {
+			common.ApiError(c, err)
+			return
+		}
+		keys = append(keys, card.Key)
+	}
+	recordManageAudit(c, "subscription_redemption.create", map[string]any{"name": req.Name, "count": req.Count, "plan_id": req.PlanID, "kind": req.Kind})
+	common.ApiSuccess(c, keys)
+}
+
 func DeleteRedemption(c *gin.Context) {
 	id, _ := strconv.Atoi(c.Param("id"))
 	err := model.DeleteRedemptionById(id)

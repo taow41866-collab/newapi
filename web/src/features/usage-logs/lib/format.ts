@@ -194,9 +194,8 @@ export function getReasoningEffortVariant(
 export function getTimeColor(
   seconds: number
 ): 'success' | 'warning' | 'danger' {
-  if (seconds < 10) return 'success'
-  if (seconds < 30) return 'warning'
-  return 'danger'
+  // Latency is a performance signal, not a request failure.
+  return 'success'
 }
 
 /**
@@ -216,9 +215,7 @@ export function getFirstResponseTimeColor(
 export function getThroughputColor(
   tokensPerSecond: number
 ): 'success' | 'warning' | 'danger' {
-  if (tokensPerSecond >= 30) return 'success'
-  if (tokensPerSecond >= 15) return 'warning'
-  return 'danger'
+  return 'success'
 }
 
 /**

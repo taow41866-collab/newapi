@@ -27,6 +27,10 @@ type SubscriptionBalancePayRequest struct {
 	PlanId int `json:"plan_id"`
 }
 
+type SubscriptionRedeemRequest struct {
+	Key string `json:"key" binding:"required"`
+}
+
 // ---- User APIs ----
 
 func GetSubscriptionPlans(c *gin.Context) {
@@ -72,6 +76,26 @@ func GetSubscriptionSelf(c *gin.Context) {
 		"subscriptions":      activeSubscriptions, // all active subscriptions
 		"all_subscriptions":  allSubscriptions,    // all subscriptions including expired
 	})
+}
+
+// RedeemSubscriptionCode exchanges a V1 subscription card without touching
+// wallet quota. The model transaction owns card locking and replay safety.
+func RedeemSubscriptionCode(c *gin.Context) {
+	var req SubscriptionRedeemRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		common.ApiErrorMsg(c, "兑换码无效")
+		return
+	}
+	if strings.TrimSpace(req.Key) == "" || len(req.Key) > 32 {
+		common.ApiErrorMsg(c, "兑换码无效")
+		return
+	}
+	sub, err := model.RedeemSubscription(req.Key, c.GetInt("id"))
+	if err != nil {
+		common.ApiErrorMsg(c, "兑换失败")
+		return
+	}
+	common.ApiSuccess(c, sub)
 }
 
 func UpdateSubscriptionPreference(c *gin.Context) {

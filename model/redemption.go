@@ -1,6 +1,8 @@
 package model
 
 import (
+	"crypto/rand"
+	"encoding/base32"
 	"errors"
 	"fmt"
 	"strconv"
@@ -24,6 +26,74 @@ type Redemption struct {
 	UsedUserId   int            `json:"used_user_id"`
 	DeletedAt    gorm.DeletedAt `gorm:"index"`
 	ExpiredTime  int64          `json:"expired_time" gorm:"bigint"` // 过期时间，0 表示不过期
+	// Subscription fields are intentionally separate from wallet quota redemptions.
+	Type               string `json:"type" gorm:"type:varchar(16);not null;default:'wallet';index"`
+	SubscriptionPlanID int    `json:"subscription_plan_id" gorm:"index"`
+	ServiceChannelID   int    `json:"service_channel_id" gorm:"index"`
+	ServiceModel       string `json:"service_model" gorm:"type:varchar(128);default:''"`
+	SubscriptionKind   string `json:"subscription_kind" gorm:"type:varchar(8);default:''"`
+}
+
+const (
+	RedemptionTypeWallet       = "wallet"
+	RedemptionTypeSubscription = "subscription"
+	SubscriptionV1ChannelID    = 24
+	SubscriptionV1Model        = "deepseek-v4.1-flash"
+)
+
+// GenerateSubscriptionRedemptionKey returns a cryptographically random, typed key.
+// The prefix is only a display aid; the database Type/Plan fields are authoritative.
+func GenerateSubscriptionRedemptionKey(kind string) (string, error) {
+	if kind != "day" && kind != "week" && kind != "month" {
+		return "", errors.New("invalid subscription kind")
+	}
+	// 128 random bits become 26 case-insensitive characters, plus a 6-byte prefix.
+	// This fits char(32), including on databases with case-insensitive collation.
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return "SUB-" + kind[:1] + "-" + base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(b), nil
+}
+
+// NewSubscriptionRedemption creates an unredeemed code bound to one plan/service.
+// Caller persists it with Insert; the unique key index protects against collisions.
+func NewSubscriptionRedemption(kind string, planID, channelID int, model string, name string, expires int64) (*Redemption, error) {
+	key, err := GenerateSubscriptionRedemptionKey(kind)
+	if err != nil || planID <= 0 || channelID != SubscriptionV1ChannelID || model != SubscriptionV1Model || expires < 0 {
+		return nil, errors.New("invalid subscription redemption binding")
+	}
+	return &Redemption{Key: key, Name: name, Type: RedemptionTypeSubscription, SubscriptionKind: kind, SubscriptionPlanID: planID, ServiceChannelID: SubscriptionV1ChannelID, ServiceModel: SubscriptionV1Model, Status: common.RedemptionCodeStatusEnabled, CreatedTime: common.GetTimestamp(), ExpiredTime: expires}, nil
+}
+
+// validateSubscriptionRedemptionPlan fails closed for legacy drafts without a kind.
+// Kind is persisted independently: the human-readable key prefix is not authority.
+func validateSubscriptionRedemptionPlan(code *Redemption, plan *SubscriptionPlan) error {
+	if plan.BillingPolicy != SubscriptionBillingPolicyDSFlashV1 {
+		return ErrRedeemFailed
+	}
+	if err := plan.ValidateBillingPolicy(); err != nil {
+		return err
+	}
+	days := 0
+	switch code.SubscriptionKind {
+	case "day":
+		days = 1
+	case "week":
+		days = 7
+	case "month":
+		days = 30
+	default:
+		return ErrRedeemFailed
+	}
+	if code.ServiceChannelID != SubscriptionV1ChannelID || code.ServiceModel != SubscriptionV1Model ||
+		!plan.Enabled || plan.DurationUnit != SubscriptionDurationDay || plan.DurationValue != days ||
+		plan.QuotaResetPeriod != SubscriptionResetDaily ||
+		plan.TotalAmount <= 0 || plan.AllowWalletOverflow == nil || *plan.AllowWalletOverflow ||
+		plan.UpgradeGroup != "" || plan.DowngradeGroup != "" {
+		return ErrRedeemFailed
+	}
+	return nil
 }
 
 func GetAllRedemptions(startIdx int, num int) (redemptions []*Redemption, total int64, err error) {
@@ -143,18 +213,18 @@ func Redeem(key string, userId int) (quota int, err error) {
 	}
 	redemption := &Redemption{}
 
-	keyCol := "`key`"
-	if common.UsingMainDatabase(common.DatabaseTypePostgreSQL) {
-		keyCol = `"key"`
-	}
 	common.RandomSleep()
 	err = DB.Transaction(func(tx *gorm.DB) error {
-		err := lockForUpdate(tx).Where(keyCol+" = ?", key).First(redemption).Error
+		err := lockForUpdate(tx).Where(commonKeyCol+" = ?", key).First(redemption).Error
 		if err != nil {
 			return errors.New("无效的兑换码")
 		}
 		if redemption.Status != common.RedemptionCodeStatusEnabled {
 			return errors.New("该兑换码已被使用")
+		}
+		// Empty is a legacy wallet row. Unknown types must never credit money.
+		if redemption.Type != "" && redemption.Type != RedemptionTypeWallet {
+			return ErrRedeemFailed
 		}
 		if redemption.ExpiredTime != 0 && redemption.ExpiredTime < common.GetTimestamp() {
 			return errors.New("该兑换码已过期")
@@ -186,12 +256,80 @@ func Redeem(key string, userId int) (quota int, err error) {
 	return redemption.Quota, nil
 }
 
+// RedeemSubscription atomically consumes a subscription key and creates its plan.
+// It never credits wallet quota and enforces the service binding stored on the key.
+func RedeemSubscription(key string, userId int) (*UserSubscription, error) {
+	if key == "" || userId <= 0 {
+		return nil, ErrRedeemFailed
+	}
+	var sub *UserSubscription
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		// Serialize different codes for one user as well, protecting plan purchase caps.
+		var user User
+		if err := lockForUpdate(tx).Select("id", "status").First(&user, userId).Error; err != nil || user.Status != common.UserStatusEnabled {
+			return ErrRedeemFailed
+		}
+		var code Redemption
+		if err := lockForUpdate(tx).Where(commonKeyCol+" = ?", key).First(&code).Error; err != nil {
+			return err
+		}
+		if code.Type != RedemptionTypeSubscription || code.Status != common.RedemptionCodeStatusEnabled || (code.ExpiredTime != 0 && code.ExpiredTime <= common.GetTimestamp()) {
+			return ErrRedeemFailed
+		}
+		if code.SubscriptionPlanID <= 0 {
+			return ErrRedeemFailed
+		}
+		var plan SubscriptionPlan
+		if err := lockForUpdate(tx).First(&plan, code.SubscriptionPlanID).Error; err != nil {
+			return err
+		}
+		if err := validateSubscriptionRedemptionPlan(&code, &plan); err != nil {
+			return err
+		}
+		if r := tx.Model(&Redemption{}).Where("id = ? AND status = ?", code.Id, common.RedemptionCodeStatusEnabled).Updates(map[string]any{"status": common.RedemptionCodeStatusUsed, "redeemed_time": common.GetTimestamp(), "used_user_id": userId}); r.Error != nil || r.RowsAffected != 1 {
+			return ErrRedeemFailed
+		}
+		var err error
+		sub, err = CreateUserSubscriptionFromPlanTx(tx, userId, &plan, "redemption")
+		return err
+	})
+	if err != nil {
+		return nil, ErrRedeemFailed
+	}
+	return sub, nil
+}
+
 func (redemption *Redemption) Insert() error {
-	if redemption.Quota <= 0 {
+	if redemption.Type == "" {
+		redemption.Type = RedemptionTypeWallet
+	}
+	if redemption.Type != RedemptionTypeWallet && redemption.Type != RedemptionTypeSubscription {
+		return errors.New("invalid redemption type")
+	}
+	if len(redemption.Key) == 0 || len(redemption.Key) > 32 {
+		return errors.New("redemption key must contain 1 to 32 bytes")
+	}
+	if redemption.Type == RedemptionTypeSubscription {
+		if redemption.SubscriptionPlanID <= 0 || redemption.ExpiredTime < 0 {
+			return ErrRedeemFailed
+		}
+		var plan SubscriptionPlan
+		if err := DB.First(&plan, redemption.SubscriptionPlanID).Error; err != nil {
+			return err
+		}
+		if err := validateSubscriptionRedemptionPlan(redemption, &plan); err != nil {
+			return err
+		}
+		// GORM's legacy quota default may fill this column; Type is the wallet guard.
+		redemption.Quota = 0
+	}
+	if redemption.Type != RedemptionTypeSubscription && redemption.Quota <= 0 {
 		return errors.New("redemption quota must be positive")
 	}
-	if err := common.ValidateWalletQuota(redemption.Quota); err != nil {
-		return err
+	if redemption.Type != RedemptionTypeSubscription {
+		if err := common.ValidateWalletQuota(redemption.Quota); err != nil {
+			return err
+		}
 	}
 	var err error
 	err = DB.Create(redemption).Error

@@ -3,6 +3,7 @@ package model
 import (
 	"errors"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"sync"
@@ -145,6 +146,12 @@ func InvalidateSubscriptionPlanCache(planId int) {
 // Subscription plan
 type SubscriptionPlan struct {
 	Id int `json:"id"`
+	// Empty preserves legacy unified-quota plans. V1 fields are server-side policy.
+	BillingPolicy         string `json:"billing_policy" gorm:"type:varchar(32);not null;default:''"`
+	ServiceChannelID      int    `json:"service_channel_id" gorm:"not null;default:0"`
+	ServiceModel          string `json:"service_model" gorm:"type:varchar(128);not null;default:''"`
+	DailyInputTokenLimit  int64  `json:"daily_input_token_limit" gorm:"type:bigint;not null;default:0"`
+	DailyOutputTokenLimit int64  `json:"daily_output_token_limit" gorm:"type:bigint;not null;default:0"`
 
 	Title    string `json:"title" gorm:"type:varchar(128);not null"`
 	Subtitle string `json:"subtitle" gorm:"type:varchar(255);default:''"`
@@ -189,7 +196,32 @@ type SubscriptionPlan struct {
 	UpdatedAt int64 `json:"updated_at" gorm:"bigint"`
 }
 
+const SubscriptionBillingPolicyDSFlashV1 = "ds-flash-v1"
+
+// ValidateBillingPolicy does not change legacy quota semantics. Management API
+// updates must validate the complete merged plan, not just a partial JSON patch.
+func (p *SubscriptionPlan) ValidateBillingPolicy() error {
+	if p.BillingPolicy == "" {
+		if p.ServiceChannelID != 0 || p.ServiceModel != "" || p.DailyInputTokenLimit != 0 || p.DailyOutputTokenLimit != 0 {
+			return errors.New("subscription policy is required for service token limits")
+		}
+		return nil
+	}
+	if p.BillingPolicy != SubscriptionBillingPolicyDSFlashV1 ||
+		p.ServiceChannelID != SubscriptionV1ChannelID || p.ServiceModel != SubscriptionV1Model ||
+		p.DailyInputTokenLimit <= 0 || p.DailyOutputTokenLimit <= 0 ||
+		p.AllowWalletOverflow == nil || *p.AllowWalletOverflow ||
+		p.QuotaResetPeriod != SubscriptionResetDaily || p.UpgradeGroup != "" || p.DowngradeGroup != "" ||
+		p.DurationUnit != SubscriptionDurationDay || (p.DurationValue != 1 && p.DurationValue != 7 && p.DurationValue != 30) {
+		return errors.New("invalid DS Flash V1 subscription policy")
+	}
+	return nil
+}
+
 func (p *SubscriptionPlan) BeforeCreate(tx *gorm.DB) error {
+	if err := p.ValidateBillingPolicy(); err != nil {
+		return err
+	}
 	now := common.GetTimestamp()
 	p.CreatedAt = now
 	p.UpdatedAt = now
@@ -254,6 +286,15 @@ type UserSubscription struct {
 	Id     int `json:"id"`
 	UserId int `json:"user_id" gorm:"index;index:idx_user_sub_active,priority:1"`
 	PlanId int `json:"plan_id" gorm:"index"`
+	// Entitlement snapshot for redeemed subscriptions, independent of template edits.
+	BillingPolicy         string `json:"billing_policy" gorm:"type:varchar(32);not null;default:''"`
+	ServiceChannelID      int    `json:"service_channel_id" gorm:"not null;default:0"`
+	ServiceModel          string `json:"service_model" gorm:"type:varchar(128);not null;default:''"`
+	DailyInputTokenLimit  int64  `json:"daily_input_token_limit" gorm:"type:bigint;not null;default:0"`
+	DailyOutputTokenLimit int64  `json:"daily_output_token_limit" gorm:"type:bigint;not null;default:0"`
+	DailyInputTokensUsed  int64  `json:"daily_input_tokens_used" gorm:"type:bigint;not null;default:0"`
+	DailyOutputTokensUsed int64  `json:"daily_output_tokens_used" gorm:"type:bigint;not null;default:0"`
+	UsageEpoch           int64  `json:"usage_epoch" gorm:"type:bigint;not null;default:0"`
 
 	AmountTotal int64 `json:"amount_total" gorm:"type:bigint;not null;default:0"`
 	AmountUsed  int64 `json:"amount_used" gorm:"type:bigint;not null;default:0"`
@@ -491,6 +532,12 @@ func CreateUserSubscriptionFromPlanTx(tx *gorm.DB, userId int, plan *Subscriptio
 	if userId <= 0 {
 		return nil, errors.New("invalid user id")
 	}
+	if err := plan.ValidateBillingPolicy(); err != nil {
+		return nil, err
+	}
+	if plan.BillingPolicy != "" && !plan.Enabled {
+		return nil, errors.New("subscription plan is disabled")
+	}
 	if plan.MaxPurchasePerUser > 0 {
 		var count int64
 		if err := tx.Model(&UserSubscription{}).
@@ -534,6 +581,11 @@ func CreateUserSubscriptionFromPlanTx(tx *gorm.DB, userId int, plan *Subscriptio
 		allowWalletOverflow = *plan.AllowWalletOverflow
 	}
 	sub := &UserSubscription{
+		BillingPolicy:         plan.BillingPolicy,
+		ServiceChannelID:      plan.ServiceChannelID,
+		ServiceModel:          plan.ServiceModel,
+		DailyInputTokenLimit:  plan.DailyInputTokenLimit,
+		DailyOutputTokenLimit: plan.DailyOutputTokenLimit,
 		UserId:              userId,
 		PlanId:              plan.Id,
 		AmountTotal:         plan.TotalAmount,
@@ -1013,7 +1065,18 @@ func resetUserSubscriptionTx(tx *gorm.DB, sub *UserSubscription, plan *Subscript
 	if tx == nil || sub == nil || plan == nil {
 		return errors.New("invalid reset args")
 	}
+	if sub.BillingPolicy == SubscriptionBillingPolicyDSFlashV1 {
+		if sub.UsageEpoch < 0 || sub.UsageEpoch == math.MaxInt64 {
+			return errors.New("subscription usage epoch exhausted")
+		}
+		sub.UsageEpoch++
+	}
 	sub.AmountUsed = 0
+	sub.DailyInputTokensUsed = 0
+	sub.DailyOutputTokensUsed = 0
+	if sub.BillingPolicy == SubscriptionBillingPolicyDSFlashV1 {
+		plan = &SubscriptionPlan{QuotaResetPeriod: SubscriptionResetDaily}
+	}
 	if advanceResetTime {
 		nextReset := calcNextResetTime(time.Unix(now, 0), plan, sub.EndTime)
 		sub.NextResetTime = nextReset
@@ -1262,6 +1325,9 @@ func maybeResetUserSubscriptionWithPlanTx(tx *gorm.DB, sub *UserSubscription, pl
 	if tx == nil || sub == nil || plan == nil {
 		return errors.New("invalid reset args")
 	}
+	if sub.BillingPolicy == SubscriptionBillingPolicyDSFlashV1 {
+		plan = &SubscriptionPlan{QuotaResetPeriod: SubscriptionResetDaily}
+	}
 	if sub.NextResetTime > 0 && sub.NextResetTime > now {
 		return nil
 	}
@@ -1288,7 +1354,15 @@ func maybeResetUserSubscriptionWithPlanTx(tx *gorm.DB, sub *UserSubscription, pl
 		}
 		return nil
 	}
+	if sub.BillingPolicy == SubscriptionBillingPolicyDSFlashV1 {
+		if sub.UsageEpoch < 0 || sub.UsageEpoch == math.MaxInt64 {
+			return errors.New("subscription usage epoch exhausted")
+		}
+		sub.UsageEpoch++
+	}
 	sub.AmountUsed = 0
+	sub.DailyInputTokensUsed = 0
+	sub.DailyOutputTokensUsed = 0
 	sub.LastResetTime = base.Unix()
 	sub.NextResetTime = next
 	return tx.Save(sub).Error
@@ -1316,12 +1390,18 @@ func PreConsumeUserSubscription(requestId string, userId int, modelName string, 
 			return query.Error
 		}
 		if query.RowsAffected > 0 {
+			if existing.UserId != userId {
+				return errors.New("subscription request belongs to another user")
+			}
 			if existing.Status == "refunded" {
 				return errors.New("subscription pre-consume already refunded")
 			}
 			var sub UserSubscription
 			if err := tx.Where("id = ?", existing.UserSubscriptionId).First(&sub).Error; err != nil {
 				return err
+			}
+			if sub.BillingPolicy != "" || sub.UserId != userId {
+				return errors.New("subscription requires dedicated token billing")
 			}
 			returnValue.UserSubscriptionId = sub.Id
 			returnValue.PreConsumed = existing.PreConsumed
@@ -1342,6 +1422,10 @@ func PreConsumeUserSubscription(requestId string, userId int, modelName string, 
 			return errors.New("no active subscription")
 		}
 		for _, candidate := range subs {
+			// Never consume V1 as an unlimited legacy quota subscription.
+			if candidate.BillingPolicy != "" {
+				continue
+			}
 			sub := candidate
 			plan, err := getSubscriptionPlanByIdTx(tx, sub.PlanId)
 			if err != nil {
@@ -1367,6 +1451,9 @@ func PreConsumeUserSubscription(requestId string, userId int, modelName string, 
 			if err := tx.Create(record).Error; err != nil {
 				var dup SubscriptionPreConsumeRecord
 				if err2 := tx.Where("request_id = ?", requestId).First(&dup).Error; err2 == nil {
+					if dup.UserId != userId || dup.UserSubscriptionId != sub.Id {
+						return errors.New("subscription request binding mismatch")
+					}
 					if dup.Status == "refunded" {
 						return errors.New("subscription pre-consume already refunded")
 					}
@@ -1520,6 +1607,9 @@ func PostConsumeUserSubscriptionDelta(userSubscriptionId int, delta int64) error
 			Where("id = ?", userSubscriptionId).
 			First(&sub).Error; err != nil {
 			return err
+		}
+		if sub.BillingPolicy != "" {
+			return errors.New("subscription requires dedicated token billing")
 		}
 		newUsed := max(sub.AmountUsed+delta, 0)
 		if sub.AmountTotal > 0 && newUsed > sub.AmountTotal {

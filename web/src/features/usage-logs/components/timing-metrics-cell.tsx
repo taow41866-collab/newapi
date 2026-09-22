@@ -172,6 +172,9 @@ export function StreamTpsCell(props: StreamTpsCellProps) {
   const { t } = useTranslation()
   const showStreamError =
     props.isStream && props.streamStatus && props.streamStatus.status !== 'ok'
+  const streamStatusIsReconnect =
+    props.streamStatus?.end_reason === 'client_gone' ||
+    props.streamStatus?.end_reason === 'handler_stop'
   const tpsLabel =
     props.tokensPerSecond != null
       ? `${Math.round(props.tokensPerSecond)} t/s`
@@ -200,7 +203,16 @@ export function StreamTpsCell(props: StreamTpsCellProps) {
           <TooltipProvider>
             <Tooltip>
               <TooltipTrigger
-                render={<CircleAlert className='text-destructive size-3' />}
+                render={
+                  <CircleAlert
+                    className={cn(
+                      'size-3',
+                      streamStatusIsReconnect
+                        ? 'text-warning'
+                        : 'text-destructive'
+                    )}
+                  />
+                }
               />
               <TooltipContent>
                 <div className='space-y-0.5 text-xs'>
