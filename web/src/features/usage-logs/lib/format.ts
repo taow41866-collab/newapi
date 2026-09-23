@@ -195,6 +195,7 @@ export function getTimeColor(
   seconds: number
 ): 'success' | 'warning' | 'danger' {
   // Latency is a performance signal, not a request failure.
+  void seconds
   return 'success'
 }
 
@@ -215,6 +216,7 @@ export function getFirstResponseTimeColor(
 export function getThroughputColor(
   tokensPerSecond: number
 ): 'success' | 'warning' | 'danger' {
+  void tokensPerSecond
   return 'success'
 }
 
