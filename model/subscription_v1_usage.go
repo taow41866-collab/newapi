@@ -76,7 +76,7 @@ func ReserveSubscriptionV1Tokens(requestID string, userID, subscriptionID, chann
 			result.Usage, result.Replay = existing, true
 			return nil
 		}
-		now := GetDBTimestamp()
+		now := getDBTimestampFrom(tx)
 		if sub.Status != "active" || sub.StartTime > now || sub.EndTime <= now || sub.UsageEpoch < 0 { return ErrSubscriptionV1State }
 		if err := maybeResetUserSubscriptionWithPlanTx(tx, &sub, &SubscriptionPlan{QuotaResetPeriod: SubscriptionResetDaily}, now); err != nil { return err }
 		if sub.DailyInputTokenLimit <= 0 || sub.DailyOutputTokenLimit <= 0 || sub.DailyInputTokensUsed < 0 || sub.DailyOutputTokensUsed < 0 ||
@@ -122,7 +122,7 @@ func finalizeSubscriptionV1Tokens(requestID string, userID, subscriptionID int, 
 			return nil
 		}
 		if usage.ReservedInput < 0 || usage.ReservedOutput < 0 || usage.ReservedInput > math.MaxInt32 || usage.ReservedOutput > math.MaxInt32 || inputTokens > usage.ReservedInput || outputTokens > usage.ReservedOutput { return ErrSubscriptionV1OverReservation }
-		if err := maybeResetUserSubscriptionWithPlanTx(tx, &sub, &SubscriptionPlan{QuotaResetPeriod: SubscriptionResetDaily}, GetDBTimestamp()); err != nil { return err }
+		if err := maybeResetUserSubscriptionWithPlanTx(tx, &sub, &SubscriptionPlan{QuotaResetPeriod: SubscriptionResetDaily}, getDBTimestampFrom(tx)); err != nil { return err }
 		if usage.UsageEpoch == sub.UsageEpoch && usage.WindowStart == max(sub.StartTime, sub.LastResetTime) {
 			inputRefund, outputRefund := usage.ReservedInput-inputTokens, usage.ReservedOutput-outputTokens
 			if inputRefund > sub.DailyInputTokensUsed || outputRefund > sub.DailyOutputTokensUsed { return errors.New("reservation accounting mismatch") }
