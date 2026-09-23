@@ -39,3 +39,16 @@
 ### 当前停止点
 
 线上源码不是 Git 工作树，Go 测试工具和扣费主流程接入均未就绪。满足这些条件前不替换线上镜像、不开放套餐、不生成正式卡密。
+
+## 2026-09-24 本轮计划状态：订阅事务测试超时修复
+
+- [x] 复核 CI #1 的失败类型：订阅兑换回归测试因事务内另取 SQLite 连接而超时。
+- [x] 修复并推送 `3dbcf7182660bd686ad9849577bd5af7c5ed1219`；将事务内数据库时间读取改为复用当前 `tx`。
+- [x] GitHub Actions CI #3：后端 vet/build/test 和前端 typecheck/test 全部通过。
+- [x] 香港 `/opt/newapi-v1` 干净工作区快进到同一提交；未构建镜像或触碰运行容器。
+- [x] 复核事务时间 helper、所有事务调用点及订阅重放/结算断言；确认事务路径均传入当前 `tx`，回归用例覆盖兑换、预扣重放、结算和重复结算。
+- [x] 为 `TestSubscriptionV1ReserveSettleAndReplay` 添加 `go test -race` CI 关卡。
+- [ ] 推送 workflow 变更并确认新 Actions run 的 race 用例、全量后端测试与前端测试通过。
+- [ ] 记录未覆盖范围：当前 Actions 没有 MySQL/PostgreSQL 服务矩阵；不得将 SQLite 测试结果表述为生产数据库验证。
+
+执行边界：仅 GitHub Actions runner；禁止操作生产数据库、容器、域名及镜像。保留四个未提交前端文件，不纳入本次提交。

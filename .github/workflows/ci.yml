@@ -55,6 +55,9 @@ jobs:
         working-directory: relaykit
         run: go build ./...
 
+      - name: Race-test subscription transaction regression
+        run: go test -race ./model -run '^TestSubscriptionV1ReserveSettleAndReplay$' -count=1
+
       - name: Test root and relaykit modules
         run: make test
 
