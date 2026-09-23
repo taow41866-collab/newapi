@@ -52,3 +52,10 @@
 - [x] 记录未覆盖范围：当前 Actions 没有 MySQL/PostgreSQL 服务矩阵；不得将 SQLite 测试结果表述为生产数据库验证。
 
 执行边界：仅 GitHub Actions runner；禁止操作生产数据库、容器、域名及镜像。保留四个未提交前端文件，不纳入本次提交。
+
+## 后续计划状态：MySQL/PostgreSQL 单连接事务验证
+
+- [x] 新增 `TestGetDBTimestampFromTransactionWithSingleConnection`，覆盖 SQLite、MySQL、PostgreSQL，pool 限制为1并检查 SQL 错误/上下文超时。
+- [x] workflow 增加 CI 临时 MySQL 8、PostgreSQL 16 服务，DSN 仅提供给聚焦测试步骤。
+- [ ] CI 确认三个数据库子用例均通过且未跳过；race、全量后端、前端仍全部通过。
+- [ ] 完成后记录验收边界；不触碰香港生产数据库、容器和镜像。

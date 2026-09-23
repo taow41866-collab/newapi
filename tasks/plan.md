@@ -90,3 +90,13 @@
 - race 检测可能增加 CI 时间；只对导致问题的聚焦用例执行 race，避免整套历史测试翻倍。
 - 当前 workflow 没有 MySQL/PostgreSQL service matrix；该修复的明确回归是单连接 SQLite 测试超时，数据库方言真实服务测试仍作为后续未覆盖项记录。
 - 仓库存在 4 个未提交的前端文件；不得纳入本次提交。
+
+## 后续计划：数据库方言单连接事务验证
+
+基于已通过的 CI #4，补齐 MySQL/PostgreSQL 的数据库时间 SQL 与单连接事务检查，测试只运行于 Actions service containers。
+
+1. 新增 SQLite/MySQL/PostgreSQL 单连接事务测试；缺少对应 DSN 时明确 skip，断言时间查询无数据库错误且事务上下文未超时。
+2. 在 CI 后端 job 启动 MySQL 8 和 PostgreSQL 16 临时服务，只向聚焦测试步骤注入临时 DSN；现有全量测试继续保持默认 SQLite。
+3. 推送后检查该聚焦测试三个子用例均执行（非 skip），再确认 race、全量后端、前端 job 通过。
+
+不在香港服务器启动数据库，不接触生产 SQL DSN、生产容器或生产镜像。MySQL/PostgreSQL 是数据库行为验证，不等同于完整生产迁移验收。
