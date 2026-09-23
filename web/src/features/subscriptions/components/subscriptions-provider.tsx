@@ -25,6 +25,7 @@ import {
 import useDialogState from '@/hooks/use-dialog'
 
 import { type PlanRecord, type SubscriptionsDialogType } from '../types'
+import type { PlanPeriod } from './subscription-plan-cards'
 
 const CURRENT_COMPLIANCE_TERMS_VERSION = 'v1'
 
@@ -36,6 +37,8 @@ type SubscriptionsContextType = {
   refreshTrigger: number
   triggerRefresh: () => void
   complianceConfirmed: boolean
+  createPeriod: PlanPeriod
+  setCreatePeriod: React.Dispatch<React.SetStateAction<PlanPeriod>>
 }
 
 const SubscriptionsContext =
@@ -48,6 +51,7 @@ export function SubscriptionsProvider({
 }) {
   const [open, setOpen] = useDialogState<SubscriptionsDialogType>(null)
   const [currentRow, setCurrentRow] = useState<PlanRecord | null>(null)
+  const [createPeriod, setCreatePeriod] = useState<PlanPeriod>('month')
   const [refreshTrigger, setRefreshTrigger] = useState(0)
   const { data } = useSystemOptions()
   const complianceOptions = getOptionValue(data?.data, {
@@ -71,6 +75,8 @@ export function SubscriptionsProvider({
         refreshTrigger,
         triggerRefresh,
         complianceConfirmed,
+        createPeriod,
+        setCreatePeriod,
       }}
     >
       {children}

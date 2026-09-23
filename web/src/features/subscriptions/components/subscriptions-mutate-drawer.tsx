@@ -96,7 +96,7 @@ export function SubscriptionsMutateDrawer({
 }: Props) {
   const { t } = useTranslation()
   const isEdit = !!currentRow?.plan?.id
-  const { triggerRefresh } = useSubscriptions()
+  const { triggerRefresh, createPeriod } = useSubscriptions()
   const { meta: currencyMeta } = getCurrencyDisplay()
   const tokensOnly = currencyMeta.kind === 'tokens'
   const currencyLabel = getCurrencyLabel()
@@ -118,7 +118,12 @@ export function SubscriptionsMutateDrawer({
       if (currentRow?.plan) {
         form.reset(planToFormValues(currentRow.plan))
       } else {
-        form.reset(PLAN_FORM_DEFAULTS)
+        const duration_unit = createPeriod === 'week' ? 'day' : createPeriod
+        form.reset({
+          ...PLAN_FORM_DEFAULTS,
+          duration_unit: duration_unit === 'other' ? 'custom' : duration_unit,
+          duration_value: createPeriod === 'week' ? 7 : 1,
+        })
       }
       getGroups()
         .then((res) => {
@@ -147,7 +152,7 @@ export function SubscriptionsMutateDrawer({
         })
         .catch(() => setPancakeProducts([]))
     }
-  }, [open, currentRow, form])
+  }, [open, currentRow, form, createPeriod])
 
   const durationUnit = form.watch('duration_unit')
   const resetPeriod = form.watch('quota_reset_period')

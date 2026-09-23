@@ -17,22 +17,21 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { useQuery } from '@tanstack/react-query'
-import { useMemo } from 'react'
-import { useTranslation } from 'react-i18next'
 
-import { DataTablePage, useDataTable } from '@/components/data-table'
+import { ErrorState } from '@/components/error-state'
+import { LoadingState } from '@/components/loading-state'
 import { requireServerSuccess } from '@/lib/server-error-message'
 
 import { getAdminPlans } from '../api'
-import { useSubscriptionsColumns } from './subscriptions-columns'
+import { SubscriptionPlanActions } from './data-table-row-actions'
+import { SubscriptionPlanCards } from './subscription-plan-cards'
 import { useSubscriptions } from './subscriptions-provider'
 
 export function SubscriptionsTable() {
-  const { t } = useTranslation()
-  const columns = useSubscriptionsColumns()
-  const { refreshTrigger } = useSubscriptions()
+  const { refreshTrigger, complianceConfirmed, setOpen, setCreatePeriod } =
+    useSubscriptions()
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, isError, refetch } = useQuery({
     queryKey: ['admin-subscription-plans', refreshTrigger],
     queryFn: async () => {
       const result = requireServerSuccess(await getAdminPlans())
@@ -41,26 +40,18 @@ export function SubscriptionsTable() {
     placeholderData: (prev) => prev,
   })
 
-  const plans = useMemo(() => data || [], [data])
-
-  const { table } = useDataTable({
-    data: plans,
-    columns,
-    withFilteredRowModel: false,
-    withFacetedRowModel: false,
-  })
+  if (isLoading) return <LoadingState />
+  if (isError) return <ErrorState onRetry={() => void refetch()} />
 
   return (
-    <DataTablePage
-      table={table}
-      columns={columns}
-      isLoading={isLoading}
-      emptyTitle={t('No subscription plans yet')}
-      emptyDescription={t(
-        'Click "Create Plan" to create your first subscription plan'
-      )}
-      skeletonKeyPrefix='subscriptions-skeleton'
-      applyHeaderSize
+    <SubscriptionPlanCards
+      plans={data || []}
+      canCreate={complianceConfirmed}
+      onCreate={(period) => {
+        setCreatePeriod(period)
+        setOpen('create')
+      }}
+      renderActions={(record) => <SubscriptionPlanActions record={record} />}
     />
   )
 }

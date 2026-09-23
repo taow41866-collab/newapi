@@ -35,23 +35,27 @@ interface DataTableRowActionsProps {
 }
 
 export function DataTableRowActions({ row }: DataTableRowActionsProps) {
+  return <SubscriptionPlanActions record={row.original} />
+}
+
+export function SubscriptionPlanActions({ record }: { record: PlanRecord }) {
   const { t } = useTranslation()
   const { setOpen, setCurrentRow, complianceConfirmed } = useSubscriptions()
-  const isEnabled = row.original.plan.enabled
+  const isEnabled = record.plan.enabled
   const toggleLabel = isEnabled ? t('Disable') : t('Enable')
 
   const handleEdit = () => {
-    setCurrentRow(row.original)
+    setCurrentRow(record)
     setOpen('update')
   }
 
   const handleToggleStatus = () => {
-    setCurrentRow(row.original)
+    setCurrentRow(record)
     setOpen('toggle-status')
   }
 
   const handleResetSubscriptions = () => {
-    setCurrentRow(row.original)
+    setCurrentRow(record)
     setOpen('reset-subscriptions')
   }
 

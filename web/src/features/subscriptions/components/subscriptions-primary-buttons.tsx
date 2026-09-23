@@ -25,12 +25,15 @@ import { useSubscriptions } from './subscriptions-provider'
 
 export function SubscriptionsPrimaryButtons() {
   const { t } = useTranslation()
-  const { setOpen, complianceConfirmed } = useSubscriptions()
+  const { setOpen, setCreatePeriod, complianceConfirmed } = useSubscriptions()
   return (
     <div className='flex gap-2'>
       <Button
         size='sm'
-        onClick={() => setOpen('create')}
+        onClick={() => {
+          setCreatePeriod('month')
+          setOpen('create')
+        }}
         disabled={!complianceConfirmed}
       >
         <Plus className='h-4 w-4' />
