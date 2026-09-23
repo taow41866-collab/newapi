@@ -63,3 +63,13 @@
 - [x] 将 CI 临时 MySQL/PostgreSQL DSN 暴露给 `make test`，执行仓库已有的跨库迁移/数据库行为测试；修正 PostgreSQL DSN 为 loopback URL 后通过 CI #7。
 - [x] CI #7（提交 `a11f389ae5e638b9f89d4d0af3b895fa5a9f47a4`）后端 vet、构建、race、SQLite/MySQL/PostgreSQL 测试和全量后端测试通过；前端 typecheck/test 通过。
 - [x] 明确验收边界：以上均为 GitHub Actions 临时环境验证，不包含生产数据迁移、生产镜像或线上实例；未操作香港生产环境。
+
+## 2026-09-24 本轮状态：管理员发卡与客户购买隔离
+
+- [x] 提交 `27ffcc1675f2c4db6b63850f463a9a3602e79cbc` 推送到 `user-origin/color-fix-staging`。
+- [x] 管理员后台增加 V1 日/周/月卡密批量生成入口，后端事务批次写入，唯一键冲突全批次回滚。
+- [x] V1 套餐固定为兑换通道；普通用户公开套餐列表、余额购买、Epay/Stripe/Creem/Waffo 支付均拒绝直接购买。
+- [x] 保留 4 个既存用户改动文件未提交：`web/src/features/keys/components/api-keys-dialogs.tsx`、`web/src/features/keys/components/dialogs/__tests__/cc-switch-dialog.test.tsx`、`web/src/features/keys/components/dialogs/cc-switch-dialog.tsx`、`web/src/lib/api.ts`。
+- [x] 本地静态检查：`git diff --check`、中文 JSON Python 解析通过；Windows 本机无 Go/Bun，不能本地编译。
+- [ ] GitHub Actions 尚未为该提交产生新运行记录（当前 workflow 仅 pull_request/workflow_dispatch 触发）；需通过 PR 或手动 dispatch 完成 CI。
+- [ ] V1 relay 预扣/结算/退款仍未接入主请求链，禁止替换生产镜像、开放客户购买或发放正式卡密。
