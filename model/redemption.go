@@ -66,6 +66,57 @@ func NewSubscriptionRedemption(kind string, planID, channelID int, model string,
 	return &Redemption{Key: key, Name: name, Type: RedemptionTypeSubscription, SubscriptionKind: kind, SubscriptionPlanID: planID, ServiceChannelID: SubscriptionV1ChannelID, ServiceModel: SubscriptionV1Model, Status: common.RedemptionCodeStatusEnabled, CreatedTime: common.GetTimestamp(), ExpiredTime: expires}, nil
 }
 
+func insertSubscriptionRedemptionsTx(tx *gorm.DB, plan *SubscriptionPlan, cards []*Redemption) error {
+	if tx == nil || plan == nil || len(cards) == 0 {
+		return errors.New("invalid subscription redemption batch")
+	}
+	for _, card := range cards {
+		if card == nil || card.Type != RedemptionTypeSubscription || card.SubscriptionPlanID != plan.Id {
+			return errors.New("invalid subscription redemption binding")
+		}
+		if err := validateSubscriptionRedemptionPlan(card, plan); err != nil {
+			return err
+		}
+		if err := tx.Create(card).Error; err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// CreateSubscriptionRedemptions creates one plan-bound batch atomically.
+func CreateSubscriptionRedemptions(kind string, planID, count int, name string, expires int64) ([]string, error) {
+	if planID <= 0 || count < 1 || count > 100 || expires < 0 {
+		return nil, errors.New("invalid subscription redemption batch")
+	}
+	cards := make([]*Redemption, 0, count)
+	for range count {
+		card, err := NewSubscriptionRedemption(kind, planID, SubscriptionV1ChannelID, SubscriptionV1Model, name, expires)
+		if err != nil {
+			return nil, err
+		}
+		cards = append(cards, card)
+	}
+	keys := make([]string, 0, count)
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		var plan SubscriptionPlan
+		if err := tx.First(&plan, planID).Error; err != nil {
+			return err
+		}
+		if err := insertSubscriptionRedemptionsTx(tx, &plan, cards); err != nil {
+			return err
+		}
+		for _, card := range cards {
+			keys = append(keys, card.Key)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return keys, nil
+}
+
 // validateSubscriptionRedemptionPlan fails closed for legacy drafts without a kind.
 // Kind is persisted independently: the human-readable key prefix is not authority.
 func validateSubscriptionRedemptionPlan(code *Redemption, plan *SubscriptionPlan) error {

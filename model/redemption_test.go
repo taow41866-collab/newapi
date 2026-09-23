@@ -23,6 +23,16 @@ func TestSubscriptionRedemptionKeyFitsExistingColumn(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestV1SubscriptionPlansAreRedeemOnly(t *testing.T) {
+	legacyPlan := &SubscriptionPlan{}
+	v1Plan := &SubscriptionPlan{BillingPolicy: SubscriptionBillingPolicyDSFlashV1}
+	unknownPolicyPlan := &SubscriptionPlan{BillingPolicy: "future-policy"}
+
+	assert.True(t, IsSubscriptionPlanCustomerPurchasable(legacyPlan))
+	assert.False(t, IsSubscriptionPlanCustomerPurchasable(v1Plan))
+	assert.False(t, IsSubscriptionPlanCustomerPurchasable(unknownPolicyPlan))
+}
+
 func TestSubscriptionV1ReserveSettleAndReplay(t *testing.T) {
 	userID, code, _ := setupSubscriptionRedemptionFixture(t)
 	sub, err := RedeemSubscription(code.Key, userID)
@@ -278,6 +288,27 @@ func TestSubscriptionRedemptionCannotExpandServiceBinding(t *testing.T) {
 	require.Error(t, err)
 	code := &Redemption{Type: "unknown", Key: "unknown-type", Quota: 100}
 	require.Error(t, code.Insert())
+}
+
+func TestSubscriptionRedemptionBatchRollsBackOnKeyCollision(t *testing.T) {
+	_, _, plan := setupSubscriptionRedemptionFixture(t)
+	first, err := NewSubscriptionRedemption("day", plan.Id, SubscriptionV1ChannelID, SubscriptionV1Model, "batch-test", 0)
+	require.NoError(t, err)
+	second := *first
+	second.Id = 0
+	var cards []string
+	err = DB.Transaction(func(tx *gorm.DB) error {
+		if err := insertSubscriptionRedemptionsTx(tx, plan, []*Redemption{first, &second}); err != nil {
+			return err
+		}
+		cards = append(cards, first.Key, second.Key)
+		return nil
+	})
+	require.Error(t, err)
+	assert.Empty(t, cards)
+	var count int64
+	require.NoError(t, DB.Model(&Redemption{}).Where("name = ?", "batch-test").Count(&count).Error)
+	assert.Zero(t, count)
 }
 
 func TestRedeemRejectsNonWalletTypesWithoutConsuming(t *testing.T) {

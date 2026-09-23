@@ -154,18 +154,14 @@ func AddSubscriptionRedemption(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"success": false, "message": msg})
 		return
 	}
-	keys := make([]string, 0, req.Count)
-	for i := 0; i < req.Count; i++ {
-		card, err := model.NewSubscriptionRedemption(req.Kind, req.PlanID, model.SubscriptionV1ChannelID, model.SubscriptionV1Model, req.Name, req.ExpiredTime)
-		if err != nil {
-			common.ApiErrorMsg(c, "订阅卡参数无效")
-			return
-		}
-		if err := card.Insert(); err != nil {
-			common.ApiError(c, err)
-			return
-		}
-		keys = append(keys, card.Key)
+	if utf8.RuneCountInString(req.Name) == 0 || utf8.RuneCountInString(req.Name) > 20 {
+		common.ApiErrorMsg(c, "订阅卡名称长度无效")
+		return
+	}
+	keys, err := model.CreateSubscriptionRedemptions(req.Kind, req.PlanID, req.Count, req.Name, req.ExpiredTime)
+	if err != nil {
+		common.ApiErrorMsg(c, "订阅卡生成失败，未创建任何卡密")
+		return
 	}
 	recordManageAudit(c, "subscription_redemption.create", map[string]any{"name": req.Name, "count": req.Count, "plan_id": req.PlanID, "kind": req.Kind})
 	common.ApiSuccess(c, keys)

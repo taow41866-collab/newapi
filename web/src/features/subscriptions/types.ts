@@ -156,5 +156,6 @@ export interface SelfSubscriptionData {
 export type SubscriptionsDialogType =
   | 'create'
   | 'update'
+  | 'create-codes'
   | 'toggle-status'
   | 'reset-subscriptions'

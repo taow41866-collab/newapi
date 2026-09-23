@@ -66,6 +66,17 @@ export async function patchPlanStatus(
   return res.data
 }
 
+export async function createSubscriptionRedemptions(data: {
+  name: string
+  count: number
+  plan_id: number
+  kind: 'day' | 'week' | 'month'
+  expired_time: number
+}): Promise<ApiResponse<string[]>> {
+  const res = await api.post('/api/redemption/subscription', data)
+  return res.data
+}
+
 // ============================================================================
 // Admin User Subscription Management
 // ============================================================================

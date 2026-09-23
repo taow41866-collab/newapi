@@ -46,12 +46,23 @@ func GetSubscriptionPlans(c *gin.Context) {
 	}
 	result := make([]SubscriptionPlanDTO, 0, len(plans))
 	for _, p := range plans {
+		if !model.IsSubscriptionPlanCustomerPurchasable(&p) {
+			continue
+		}
 		p.NormalizeDefaults()
 		result = append(result, SubscriptionPlanDTO{
 			Plan: p,
 		})
 	}
 	common.ApiSuccess(c, result)
+}
+
+func rejectCodeOnlySubscriptionPlan(c *gin.Context, plan *model.SubscriptionPlan) bool {
+	if model.IsSubscriptionPlanCustomerPurchasable(plan) {
+		return false
+	}
+	common.ApiErrorMsg(c, "该套餐暂不支持直接购买，请使用兑换码")
+	return true
 }
 
 func GetSubscriptionSelf(c *gin.Context) {

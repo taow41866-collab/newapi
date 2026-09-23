@@ -125,6 +125,11 @@ jobs:
           src/features/subscriptions/index.tsx
           src/features/subscriptions/components/subscriptions-table.tsx
           src/features/subscriptions/components/subscription-plan-cards.tsx
+          src/features/subscriptions/components/subscriptions-primary-buttons.tsx
+          src/features/subscriptions/components/subscriptions-dialogs.tsx
+          src/features/subscriptions/components/dialogs/create-subscription-codes-dialog.tsx
+          src/features/subscriptions/lib/redemption.ts
+          src/features/subscriptions/lib/__tests__/redemption.test.ts
           src/features/subscriptions/components/__tests__/plan-cards.test.tsx
 
       - name: Typecheck

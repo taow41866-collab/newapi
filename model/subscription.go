@@ -198,6 +198,12 @@ type SubscriptionPlan struct {
 
 const SubscriptionBillingPolicyDSFlashV1 = "ds-flash-v1"
 
+// IsSubscriptionPlanCustomerPurchasable keeps policy-backed subscriptions on
+// the redemption path until their customer purchase flow is enabled.
+func IsSubscriptionPlanCustomerPurchasable(plan *SubscriptionPlan) bool {
+	return plan != nil && plan.BillingPolicy == ""
+}
+
 // ValidateBillingPolicy does not change legacy quota semantics. Management API
 // updates must validate the complete merged plan, not just a partial JSON patch.
 func (p *SubscriptionPlan) ValidateBillingPolicy() error {
@@ -821,6 +827,9 @@ func PurchaseSubscriptionWithBalance(userId int, planId int) error {
 		}
 		if !plan.Enabled {
 			return errors.New("套餐未启用")
+		}
+		if !IsSubscriptionPlanCustomerPurchasable(plan) {
+			return errors.New("该套餐暂不支持直接购买，请使用兑换码")
 		}
 		if plan.PriceAmount < 0 {
 			return errors.New("套餐价格不能为负数")
