@@ -30,19 +30,25 @@ import type { PlanRecord, SubscriptionPlan } from '../types'
 
 export type PlanPeriod = 'day' | 'week' | 'month' | 'year' | 'other'
 
-export function getPlanPeriod(plan: SubscriptionPlan): PlanPeriod {
-  if (plan.duration_unit === 'day' && plan.duration_value === 1) return 'day'
-  if (plan.duration_unit === 'day' && plan.duration_value === 7) return 'week'
+function getPlanPeriod(plan: SubscriptionPlan): PlanPeriod {
+  if (plan.duration_unit === 'day' && plan.duration_value === 1) {
+    return 'day'
+  }
+  if (plan.duration_unit === 'day' && plan.duration_value === 7) {
+    return 'week'
+  }
   if (
     (plan.duration_unit === 'month' && plan.duration_value === 1) ||
     (plan.duration_unit === 'day' && plan.duration_value === 30)
-  )
+  ) {
     return 'month'
+  }
   if (
     (plan.duration_unit === 'year' && plan.duration_value === 1) ||
     (plan.duration_unit === 'month' && plan.duration_value === 12)
-  )
+  ) {
     return 'year'
+  }
   return 'other'
 }
 
@@ -65,10 +71,12 @@ export function SubscriptionPlanCards(props: Props) {
     other: t('Other periods'),
   }
   const groups: PlanPeriod[] = ['day', 'week', 'month']
-  if (props.plans.some((record) => getPlanPeriod(record.plan) === 'year'))
+  if (props.plans.some((record) => getPlanPeriod(record.plan) === 'year')) {
     groups.push('year')
-  if (props.plans.some((record) => getPlanPeriod(record.plan) === 'other'))
+  }
+  if (props.plans.some((record) => getPlanPeriod(record.plan) === 'other')) {
     groups.push('other')
+  }
   const selected = groups.includes(period as PlanPeriod) ? period : 'all'
   const visibleGroups = groups.filter(
     (group) => selected === 'all' || group === selected
@@ -107,6 +115,12 @@ export function SubscriptionPlanCards(props: Props) {
                 (a, b) =>
                   b.plan.sort_order - a.plan.sort_order || a.plan.id - b.plan.id
               )
+            let gridColumns = ''
+            if (records.length > 2) {
+              gridColumns = 'xl:grid-cols-3'
+            } else if (records.length > 1) {
+              gridColumns = 'xl:grid-cols-2'
+            }
             return (
               <section
                 key={group}
@@ -127,7 +141,7 @@ export function SubscriptionPlanCards(props: Props) {
                   <div className='bg-border h-px flex-1' />
                 </div>
                 <div
-                  className={`grid grid-cols-1 gap-3 ${records.length > 2 ? 'xl:grid-cols-3' : records.length > 1 ? 'xl:grid-cols-2' : ''}`}
+                  className={`grid grid-cols-1 gap-3 ${gridColumns}`}
                 >
                   {records.length === 0 && (
                     <div className='bg-muted/30 flex flex-wrap items-center justify-between gap-3 rounded-md border border-dashed px-4 py-3'>

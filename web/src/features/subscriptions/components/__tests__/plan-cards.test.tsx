@@ -104,8 +104,9 @@ describe('administrator plan cards', () => {
   })
   it('disables creation when existing compliance restrictions apply', async () => {
     await setup([], true)
-    for (const button of screen.getAllByRole('button', { name: 'Create Plan' }))
+    for (const button of screen.getAllByRole('button', { name: 'Create Plan' })) {
       expect(button).toBeDisabled()
+    }
   })
   it('offers a year filter when an annual plan exists and shows only that period', async () => {
     const { user } = await setup([plan(1, 'day', 1), plan(4, 'year', 1)])
