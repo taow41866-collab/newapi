@@ -48,7 +48,7 @@
 - [x] 香港 `/opt/newapi-v1` 干净工作区快进到同一提交；未构建镜像或触碰运行容器。
 - [x] 复核事务时间 helper、所有事务调用点及订阅重放/结算断言；确认事务路径均传入当前 `tx`，回归用例覆盖兑换、预扣重放、结算和重复结算。
 - [x] 为 `TestSubscriptionV1ReserveSettleAndReplay` 添加 `go test -race` CI 关卡。
-- [ ] 推送 workflow 变更并确认新 Actions run 的 race 用例、全量后端测试与前端测试通过。
-- [ ] 记录未覆盖范围：当前 Actions 没有 MySQL/PostgreSQL 服务矩阵；不得将 SQLite 测试结果表述为生产数据库验证。
+- [x] 推送 workflow 变更；CI #4（SHA `d5a4af5464054eb82d1bc9d98be551272622b7ef`）race 回归1分16秒、全量后端55秒、前端165个测试文件/2065项均通过，总计6分34秒。
+- [x] 记录未覆盖范围：当前 Actions 没有 MySQL/PostgreSQL 服务矩阵；不得将 SQLite 测试结果表述为生产数据库验证。
 
 执行边界：仅 GitHub Actions runner；禁止操作生产数据库、容器、域名及镜像。保留四个未提交前端文件，不纳入本次提交。
