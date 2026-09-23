@@ -57,5 +57,6 @@
 
 - [x] 新增 `TestGetDBTimestampFromTransactionWithSingleConnection`，覆盖 SQLite、MySQL、PostgreSQL，pool 限制为1并检查 SQL 错误/上下文超时。
 - [x] workflow 增加 CI 临时 MySQL 8、PostgreSQL 16 服务，DSN 仅提供给聚焦测试步骤。
-- [ ] CI 确认三个数据库子用例均通过且未跳过；race、全量后端、前端仍全部通过。
-- [ ] 完成后记录验收边界；不触碰香港生产数据库、容器和镜像。
+- [x] CI #5（SHA `fc30bf35cb030245f575acfa3645c6ca1ebc3ce0`）聚焦 SQL 方言测试通过；workflow 本步骤提供 MySQL/PostgreSQL DSN，SQLite 子用例本地运行，因此三种方言均被纳入执行。
+- [x] CI #5 race 回归、全量后端与前端均通过；前端165个测试文件、2065项通过，总耗时6分10秒。
+- [x] 记录验收边界：仅验证临时数据库的数据库时间查询与单连接事务行为；未验证生产数据迁移、生产镜像或实际业务副本，不触碰香港生产数据库、容器和镜像。
