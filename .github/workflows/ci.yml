@@ -90,6 +90,9 @@ jobs:
         run: go test ./model -run '^TestGetDBTimestampFromTransactionWithSingleConnection$' -count=1
 
       - name: Test root and relaykit modules
+        env:
+          TEST_MYSQL_DSN: root:root@tcp(127.0.0.1:3306)/newapi_test?charset=utf8mb4&parseTime=True&loc=Local
+          TEST_POSTGRES_DSN: host=127.0.0.1 user=postgres password=postgres dbname=newapi_test port=5432 sslmode=disable
         run: make test
 
   frontend:
