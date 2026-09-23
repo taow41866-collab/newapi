@@ -105,4 +105,6 @@
 
 ### 后续扩展：仓库现有跨库集成测试
 
-将同一临时服务 DSN 注入 `make test` 步骤，启用仓库里既有的 MySQL/PostgreSQL 迁移与数据库行为测试。验收：SQLite 默认套件、已配置的数据库集成测试、竞态测试和前端 CI 全部通过；失败时只修正与本次数据库兼容验证有关的问题。
+已完成：将 Actions 临时 MySQL/PostgreSQL DSN 注入 `make test`，启用仓库现有跨库迁移与数据库行为测试。提交 `a11f389ae5e638b9f89d4d0af3b895fa5a9f47a4`（CI #7）后端 job 的 vet、两个模块构建、race 回归、SQLite/MySQL/PostgreSQL 单连接事务测试及全量后端测试均通过；前端 typecheck 与测试也通过。CI 总结见 [Actions run 35911935049](https://github.com/taow41866-collab/newapi/actions/runs/35911935049)。
+
+边界：CI 使用临时服务实例，不代表生产数据迁移、生产镜像或线上业务副本已经验收；没有操作香港生产数据库、容器或镜像。
