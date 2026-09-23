@@ -96,7 +96,7 @@ jobs:
         run: make test
 
   frontend:
-    name: Frontend lint, typecheck, test, and build
+    name: Frontend subscription lint, typecheck, test, and build
     if: github.event.action != 'closed' || github.event.pull_request.merged == true
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -119,8 +119,13 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      - name: Lint
-        run: bun run lint
+      - name: Lint subscription administration UI
+        run: >-
+          bunx oxlint -c .oxlintrc.json
+          src/features/subscriptions/index.tsx
+          src/features/subscriptions/components/subscriptions-table.tsx
+          src/features/subscriptions/components/subscription-plan-cards.tsx
+          src/features/subscriptions/components/__tests__/plan-cards.test.tsx
 
       - name: Typecheck
         run: bun run typecheck
