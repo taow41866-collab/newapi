@@ -38,7 +38,8 @@
       "os": "linux",
       "size_bytes": 78058100,
       "ghcr_target": "ghcr.io/taow41866-collab/new-api:production-baseline-20260924-master",
-      "mirror_status": "blocked-missing-packages-write"
+      "ghcr_digest": "sha256:f4ed846ae7859bed86478a25e347daa2c8726c0c5e9e2d2d3220b08714fb2e13",
+      "mirror_status": "mirrored"
     },
     {
       "role": "application-slave",
@@ -52,7 +53,8 @@
       "os": "linux",
       "size_bytes": 101472285,
       "ghcr_target": "ghcr.io/taow41866-collab/new-api:production-baseline-20260924-slave",
-      "mirror_status": "blocked-missing-packages-write"
+      "ghcr_digest": "sha256:61ec23d939c49cb0732b9d48c923de480f006d3edd8fc1e5ae227feddaa620b8",
+      "mirror_status": "mirrored"
     },
     {
       "role": "reverse-proxy",
@@ -127,14 +129,14 @@
     "registry": "ghcr.io",
     "repository": "ghcr.io/taow41866-collab/new-api",
     "visibility": "private-required",
-    "mirror_status": "blocked-missing-packages-write",
-    "reason": "GHCR login succeeded, but the registry rejected the push with permission_denied because the GitHub credential lacks packages:write. The repository is public, so a Release or Git LFS fallback is not safe for production images."
+    "mirror_status": "complete",
+    "reason": "Both application images were pushed to private GHCR and their returned digests match the Hong Kong running image digests."
   },
   "verification": {
     "production_containers_changed": false,
     "production_database_changed": false,
     "production_configuration_changed": false,
     "source_to_image_mapping": "unconfirmed",
-    "next_required_action": "Provide a private GHCR package target or a GitHub credential with packages:write, then mirror both application image digests from an isolated runner and record the resulting GHCR digests."
+    "next_required_action": "Keep the baseline tags immutable and use the recorded GHCR digests for isolated verification or a future approved rollout."
   }
 }
