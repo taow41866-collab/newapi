@@ -22,6 +22,9 @@
     "commit": "3dbcf7182660bd686ad9849577bd5af7c5ed1219",
     "tree": "f664ff430fef41e5a31e5e130b0bff4bd3617966",
     "working_tree_clean": true,
+    "git_branch": "baseline/hk-source-20260924",
+    "git_tag": "production-source-snapshot-20260924",
+    "git_tag_target_commit": "3dbcf7182660bd686ad9849577bd5af7c5ed1219",
     "relation_to_running_images": "unconfirmed",
     "reason": "The running application images do not expose an OCI revision label; the source commit timestamp is later than both application image creation timestamps."
   },
