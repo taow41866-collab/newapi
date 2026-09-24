@@ -197,6 +197,56 @@ func TestSubscriptionV1SnapshotsAndRejectsLegacyConsumption(t *testing.T) {
 	assert.Zero(t, stored.DailyInputTokensUsed)
 }
 
+func TestGetActiveSubscriptionV1ReturnsOnlyEligibleEntitlement(t *testing.T) {
+	userID, code, _ := setupSubscriptionRedemptionFixture(t)
+	sub, err := RedeemSubscription(code.Key, userID)
+	require.NoError(t, err)
+
+	active, found, err := GetActiveSubscriptionV1(userID)
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, sub.Id, active.Id)
+
+	require.NoError(t, DB.Model(&UserSubscription{}).Where("id = ?", sub.Id).Update("status", "expired").Error)
+	active, found, err = GetActiveSubscriptionV1(userID)
+	require.NoError(t, err)
+	assert.False(t, found)
+	assert.Nil(t, active)
+}
+
+func TestReserveActiveSubscriptionV1SkipsExhaustedCardAndRejectsReplay(t *testing.T) {
+	userID, code, _ := setupSubscriptionRedemptionFixture(t)
+	first, err := RedeemSubscription(code.Key, userID)
+	require.NoError(t, err)
+	require.NoError(t, DB.AutoMigrate(&SubscriptionV1Usage{}))
+	t.Cleanup(func() {
+		require.NoError(t, DB.Where("user_subscription_id IN ?", []int{first.Id}).Delete(&SubscriptionV1Usage{}).Error)
+	})
+	require.NoError(t, DB.Model(first).Updates(map[string]any{
+		"daily_input_token_limit": 100, "daily_output_token_limit": 50,
+		"daily_input_tokens_used": 100, "daily_output_tokens_used": 50,
+	}).Error)
+
+	second := *first
+	second.Id = 0
+	second.DailyInputTokensUsed = 0
+	second.DailyOutputTokensUsed = 0
+	second.EndTime += 3600
+	require.NoError(t, DB.Create(&second).Error)
+	t.Cleanup(func() {
+		require.NoError(t, DB.Where("user_subscription_id = ?", second.Id).Delete(&SubscriptionV1Usage{}).Error)
+		require.NoError(t, DB.Delete(&second).Error)
+	})
+
+	reserved, err := ReserveActiveSubscriptionV1Tokens("v1-active-card", userID, SubscriptionV1ChannelID, SubscriptionV1Model, 20, 10)
+	require.NoError(t, err)
+	assert.Equal(t, second.Id, reserved.Usage.UserSubscriptionID)
+	replay, err := ReserveActiveSubscriptionV1Tokens("v1-active-card", userID, SubscriptionV1ChannelID, SubscriptionV1Model, 20, 10)
+	require.NoError(t, err)
+	assert.True(t, replay.Replay)
+	assert.Equal(t, second.Id, replay.Usage.UserSubscriptionID)
+}
+
 func TestSubscriptionV1ValidatesCompletePolicy(t *testing.T) {
 	for _, scenario := range []string{"channel", "model", "input", "output", "policy", "wallet", "reset"} {
 		t.Run(scenario, func(t *testing.T) {

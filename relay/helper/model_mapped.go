@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	rootcommon "github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	hostreasoning "github.com/QuantumNous/new-api/setting/reasoning"
@@ -64,6 +65,15 @@ func ModelMappedHelper(c *gin.Context, info *relaycommon.RelayInfo, request dto.
 
 	if request != nil {
 		request.SetModelName(info.UpstreamModelName)
+	}
+	return validateSubscriptionV1Route(info)
+}
+
+func validateSubscriptionV1Route(info *relaycommon.RelayInfo) error {
+	if info != nil && info.SubscriptionV1Billing &&
+		(info.ChannelId != model.SubscriptionV1ChannelID || info.OriginModelName != model.SubscriptionV1Model ||
+			info.UpstreamModelName != model.SubscriptionV1Model) {
+		return errors.New("subscription V1 final service binding mismatch")
 	}
 	return nil
 }

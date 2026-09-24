@@ -28,7 +28,7 @@ func ApplyReasoningModelSuffix(c *gin.Context, info *relaycommon.RelayInfo, outb
 	}
 	if model_setting.GetGlobalSettings().PassThroughRequestEnabled ||
 		info.ChannelMeta != nil && info.ChannelSetting.PassThroughBodyEnabled {
-		return nil
+		return validateSubscriptionV1Route(info)
 	}
 
 	opts := info.ConvOptions()
@@ -118,7 +118,7 @@ func ApplyReasoningModelSuffix(c *gin.Context, info *relaycommon.RelayInfo, outb
 		diagnosticContext = c
 	}
 	info.RecordConversionDiagnostics(diagnosticContext, diagnostics)
-	return nil
+	return validateSubscriptionV1Route(info)
 }
 
 func parseRequestModelName(name string, opts *convmeta.Options) (parsedModelModifiers, error) {

@@ -42,7 +42,7 @@ var (
 	ErrSubscriptionV1OverReservation = errors.New("actual token usage exceeds reservation")
 )
 
-func validV1UsageArgs(requestID string, userID, subscriptionID int, input, output int64) bool {
+func validV1RequestArgs(requestID string, userID int, input, output int64) bool {
 	// Canonical lower-case ASCII avoids database collation aliases and truncation.
 	for _, ch := range requestID {
 		if !(ch >= 'a' && ch <= 'z' || ch >= '0' && ch <= '9' || ch == '-' || ch == '_' || ch == '.' || ch == ':') {
@@ -50,7 +50,11 @@ func validV1UsageArgs(requestID string, userID, subscriptionID int, input, outpu
 		}
 	}
 	return requestID != "" && requestID == strings.TrimSpace(requestID) && len(requestID) <= 128 &&
-		userID > 0 && subscriptionID > 0 && input >= 0 && output >= 0 && input <= math.MaxInt32 && output <= math.MaxInt32
+		userID > 0 && input >= 0 && output >= 0 && input <= math.MaxInt32 && output <= math.MaxInt32
+}
+
+func validV1UsageArgs(requestID string, userID, subscriptionID int, input, output int64) bool {
+	return validV1RequestArgs(requestID, userID, input, output) && subscriptionID > 0
 }
 
 func ReserveSubscriptionV1Tokens(requestID string, userID, subscriptionID, channelID int, modelName string, inputTokens, outputTokens int64) (*SubscriptionV1UsageResult, error) {
@@ -95,6 +99,80 @@ func ReserveSubscriptionV1Tokens(requestID string, userID, subscriptionID, chann
 		return nil
 	})
 	if err != nil { return nil, err }
+	return result, nil
+}
+
+// ReserveActiveSubscriptionV1Tokens reserves against the earliest-expiring
+// active V1 entitlement with enough daily capacity. A request ID is checked
+// globally first, so retries cannot reserve a second card or reach upstream.
+func ReserveActiveSubscriptionV1Tokens(requestID string, userID, channelID int, modelName string, inputTokens, outputTokens int64) (*SubscriptionV1UsageResult, error) {
+	if !validV1RequestArgs(requestID, userID, inputTokens, outputTokens) || inputTokens+outputTokens == 0 ||
+		channelID != SubscriptionV1ChannelID || modelName != SubscriptionV1Model {
+		return nil, errors.New("invalid token reservation")
+	}
+	result := &SubscriptionV1UsageResult{}
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		var existing SubscriptionV1Usage
+		query := lockForUpdate(tx).Where("request_id = ?", requestID).Limit(1).Find(&existing)
+		if query.Error != nil {
+			return query.Error
+		}
+		if query.RowsAffected > 0 {
+			if existing.UserID != userID || existing.ChannelID != channelID || existing.Model != modelName ||
+				existing.ReservedInput != inputTokens || existing.ReservedOutput != outputTokens {
+				return ErrSubscriptionV1Conflict
+			}
+			result.Usage, result.Replay = existing, true
+			return nil
+		}
+
+		now := getDBTimestampFrom(tx)
+		var subscriptions []UserSubscription
+		if err := lockForUpdate(tx).
+			Where("user_id = ? AND status = ? AND start_time <= ? AND end_time > ? AND billing_policy = ? AND service_channel_id = ? AND service_model = ? AND allow_wallet_overflow = ? AND daily_input_token_limit > 0 AND daily_output_token_limit > 0",
+				userID, "active", now, now, SubscriptionBillingPolicyDSFlashV1, channelID, modelName, false).
+			Order("end_time asc, id asc").Find(&subscriptions).Error; err != nil {
+			return err
+		}
+		if len(subscriptions) == 0 {
+			return errors.New("no active DS Flash V1 subscription")
+		}
+		for _, candidate := range subscriptions {
+			sub := candidate
+			if sub.UsageEpoch < 0 {
+				continue
+			}
+			if err := maybeResetUserSubscriptionWithPlanTx(tx, &sub, &SubscriptionPlan{QuotaResetPeriod: SubscriptionResetDaily}, now); err != nil {
+				return err
+			}
+			if sub.DailyInputTokensUsed < 0 || sub.DailyOutputTokensUsed < 0 ||
+				sub.DailyInputTokensUsed > sub.DailyInputTokenLimit || sub.DailyOutputTokensUsed > sub.DailyOutputTokenLimit ||
+				inputTokens > sub.DailyInputTokenLimit-sub.DailyInputTokensUsed ||
+				outputTokens > sub.DailyOutputTokenLimit-sub.DailyOutputTokensUsed {
+				continue
+			}
+			usage := SubscriptionV1Usage{
+				RequestID: requestID, UserID: userID, UserSubscriptionID: sub.Id, UsageEpoch: sub.UsageEpoch,
+				WindowStart: max(sub.StartTime, sub.LastResetTime), ChannelID: channelID, Model: modelName,
+				ReservedInput: inputTokens, ReservedOutput: outputTokens, Status: "reserved",
+				InputLimitSnapshot: sub.DailyInputTokenLimit, OutputLimitSnapshot: sub.DailyOutputTokenLimit,
+			}
+			if err := tx.Create(&usage).Error; err != nil {
+				return err
+			}
+			sub.DailyInputTokensUsed += inputTokens
+			sub.DailyOutputTokensUsed += outputTokens
+			if err := tx.Save(&sub).Error; err != nil {
+				return err
+			}
+			result.Usage = usage
+			return nil
+		}
+		return ErrSubscriptionV1Quota
+	})
+	if err != nil {
+		return nil, err
+	}
 	return result, nil
 }
 

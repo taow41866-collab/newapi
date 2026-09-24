@@ -937,6 +937,53 @@ func HasActiveUserSubscription(userId int) (bool, error) {
 	return count > 0, nil
 }
 
+// GetActiveSubscriptionV1Candidates returns current DS Flash V1 entitlements
+// in expiry order so requests consume the subscription that expires first.
+func GetActiveSubscriptionV1Candidates(userId int) ([]UserSubscription, error) {
+	if userId <= 0 {
+		return nil, errors.New("invalid userId")
+	}
+	now := GetDBTimestamp()
+	var subscriptions []UserSubscription
+	err := DB.Where("user_id = ? AND status = ? AND start_time <= ? AND end_time > ? AND billing_policy = ? AND service_channel_id = ? AND service_model = ? AND allow_wallet_overflow = ? AND daily_input_token_limit > 0 AND daily_output_token_limit > 0",
+		userId, "active", now, now, SubscriptionBillingPolicyDSFlashV1, SubscriptionV1ChannelID, SubscriptionV1Model, false).
+		Order("end_time asc, id asc").
+		Find(&subscriptions).Error
+	if err != nil {
+		return nil, err
+	}
+	return subscriptions, nil
+}
+
+// GetActiveSubscriptionV1 returns the earliest-expiring current DS Flash V1
+// entitlement, if one exists.
+func GetActiveSubscriptionV1(userId int) (*UserSubscription, bool, error) {
+	subscriptions, err := GetActiveSubscriptionV1Candidates(userId)
+	if err != nil {
+		return nil, false, err
+	}
+	if len(subscriptions) == 0 {
+		return nil, false, nil
+	}
+	return &subscriptions[0], true, nil
+}
+
+// HasActiveSubscriptionV1 is the inexpensive route-selection check used by
+// the distributor. Final entitlement validation still happens transactionally
+// when daily tokens are reserved.
+func HasActiveSubscriptionV1(userId int) (bool, error) {
+	if userId <= 0 {
+		return false, errors.New("invalid userId")
+	}
+	now := GetDBTimestamp()
+	var count int64
+	err := DB.Model(&UserSubscription{}).
+		Where("user_id = ? AND status = ? AND start_time <= ? AND end_time > ? AND billing_policy = ? AND service_channel_id = ? AND service_model = ? AND allow_wallet_overflow = ? AND daily_input_token_limit > 0 AND daily_output_token_limit > 0",
+			userId, "active", now, now, SubscriptionBillingPolicyDSFlashV1, SubscriptionV1ChannelID, SubscriptionV1Model, false).
+		Count(&count).Error
+	return count > 0, err
+}
+
 // UserActiveSubscriptionsAllowWalletOverflow returns whether wallet balance may be used
 // after the user's subscription quota is exhausted. A single active subscription that
 // disallows wallet overflow (allow_wallet_overflow = false) blocks the fallback.

@@ -183,6 +183,9 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			break
 		}
 		c.Request.Body = io.NopCloser(bodyStorage)
+		if relayInfo.SubscriptionV1Billing {
+			relayInfo.SubscriptionV1RequestStarted = true
+		}
 
 		switch relayFormat {
 		case types.RelayFormatOpenAIRealtime:

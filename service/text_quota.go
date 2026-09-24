@@ -402,6 +402,7 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 
 	adminRejectReason := common.GetContextKeyString(ctx, constant.ContextKeyAdminRejectReason)
 	summary := calculateTextQuotaSummary(ctx, relayInfo, billingUsage)
+	v1InputTokens, v1OutputTokens := int64(0), int64(0)
 
 	var tieredResult *billingexpr.TieredResult
 	var tieredTokens billingexpr.TokenParams
@@ -457,7 +458,25 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 		model.UpdateChannelUsedQuota(relayInfo.ChannelId, summary.Quota)
 	}
 
-	if err := SettleBilling(ctx, relayInfo, summary.Quota); err != nil {
+	if relayInfo.SubscriptionV1Billing {
+		if originUsage != nil {
+			v1InputTokens, v1OutputTokens = int64(originUsage.PromptTokens), int64(originUsage.CompletionTokens)
+			if v1InputTokens == 0 && v1OutputTokens == 0 {
+				v1InputTokens, v1OutputTokens = int64(originUsage.InputTokens), int64(originUsage.OutputTokens)
+			}
+		}
+		if v1InputTokens+v1OutputTokens > 0 {
+			if _, err := SettleSubscriptionV1Billing(relayInfo, v1InputTokens, v1OutputTokens); err != nil {
+				logger.LogError(ctx, "error settling subscription V1 token usage; reservation retained for reconciliation: "+err.Error())
+				extraContent = append(extraContent, "V1 Token 用量待对账")
+			} else {
+				extraContent = append(extraContent, fmt.Sprintf("V1 Token 结算：输入 %d，输出 %d（未扣钱包/API Key 余额）", v1InputTokens, v1OutputTokens))
+			}
+		} else {
+			logger.LogError(ctx, "subscription V1 response has no reliable raw token usage; reservation retained for reconciliation")
+			extraContent = append(extraContent, "V1 Token 用量待对账")
+		}
+	} else if err := SettleBilling(ctx, relayInfo, summary.Quota); err != nil {
 		logger.LogError(ctx, "error settling billing: "+err.Error())
 	}
 
@@ -484,6 +503,11 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 		other.SetPublic("usage_semantic", "anthropic")
 	} else {
 		other = GenerateTextOtherInfo(ctx, relayInfo, summary.ModelRatio, summary.GroupRatio, summary.CompletionRatio, summary.CacheTokens, summary.CacheRatio, summary.ModelPrice, relayInfo.PriceData.GroupRatioInfo.GroupSpecialRatio)
+	}
+	if relayInfo.SubscriptionV1Billing {
+		other.SetPublic("subscription_billing_mode", "raw_token_daily")
+		other.SetPublic("subscription_input_tokens", v1InputTokens)
+		other.SetPublic("subscription_output_tokens", v1OutputTokens)
 	}
 	appendUsageBillingPathForLog(other, common.GetContextKeyBool(ctx, constant.ContextKeyLocalCountTokens), originUsage)
 	if adminRejectReason != "" {

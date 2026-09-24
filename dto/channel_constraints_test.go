@@ -44,3 +44,15 @@ func TestResolvedPinPriorityAndMerge(t *testing.T) {
 		assert.Nil(t, overridden)
 	})
 }
+
+func TestSubscriptionPinOverridesTokenPinAndAllowsOneAttempt(t *testing.T) {
+	constraints := &ChannelConstraints{}
+	constraints.AddPin(ChannelPin{ChannelId: 7, Source: PinSourceToken, Rank: PinRankToken, RetryMode: PinRetrySingleAttempt})
+	constraints.AddPin(ChannelPin{ChannelId: 24, Source: PinSourceSubscription, Rank: PinRankSubscription, RetryMode: PinRetrySingleAttempt})
+
+	pin, found, _ := constraints.ResolvedPin()
+	require.True(t, found)
+	assert.Equal(t, 24, pin.ChannelId)
+	assert.Equal(t, PinSourceSubscription, pin.Source)
+	assert.True(t, constraints.SuppressesRetry())
+}

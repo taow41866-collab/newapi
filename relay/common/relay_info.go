@@ -157,6 +157,13 @@ type RelayInfo struct {
 	// SubscriptionAmountTotal / SubscriptionAmountUsedAfterPreConsume are used to compute remaining in logs.
 	SubscriptionAmountTotal               int64
 	SubscriptionAmountUsedAfterPreConsume int64
+	// SubscriptionV1Billing marks the raw-token billing path; it must never
+	// enter the quota-based wallet/API-key settlement path.
+	SubscriptionV1Billing        bool
+	SubscriptionV1RequestStarted bool
+	SubscriptionV1RequestID      string
+	SubscriptionV1SelectedChannelID int
+	SubscriptionV1SelectedModel    string
 	IsClaudeBetaQuery                     bool // /v1/messages?beta=true
 	IsChannelTest                         bool // channel test request
 	RetryIndex                            int
@@ -855,6 +862,26 @@ func (info *RelayInfo) GetChannelID() int {
 		return 0
 	}
 	return info.ChannelId
+}
+
+func (info *RelayInfo) GetSubscriptionV1ChannelID() int {
+	if info == nil {
+		return 0
+	}
+	if info.ChannelMeta != nil {
+		return info.ChannelId
+	}
+	return info.SubscriptionV1SelectedChannelID
+}
+
+func (info *RelayInfo) GetSubscriptionV1UpstreamModel() string {
+	if info == nil {
+		return ""
+	}
+	if info.ChannelMeta != nil {
+		return info.UpstreamModelName
+	}
+	return info.SubscriptionV1SelectedModel
 }
 
 func (info *RelayInfo) GetChannelType() int {
