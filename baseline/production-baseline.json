@@ -1,0 +1,140 @@
+{
+  "schema_version": 1,
+  "baseline_id": "production-baseline-20260924",
+  "captured_at": "2026-09-24T12:28:07Z",
+  "repository": {
+    "name": "taow41866-collab/newapi",
+    "baseline_branch": "baseline/production-20260924",
+    "baseline_tag": "production-baseline-20260924",
+    "git_base_commit": "0b66b0d1cf49b2602bdd45445c628f0a24e39473",
+    "working_tree_changes_in_source_worktree_preserved": true
+  },
+  "collection": {
+    "server_alias": "hk-newapi",
+    "hostname": "SAu92dl9TqPTy",
+    "read_only": true,
+    "containers_stopped_or_restarted": false,
+    "database_written": false,
+    "configuration_written": false
+  },
+  "source_snapshot": {
+    "path": "/opt/newapi-v1",
+    "commit": "3dbcf7182660bd686ad9849577bd5af7c5ed1219",
+    "tree": "f664ff430fef41e5a31e5e130b0bff4bd3617966",
+    "working_tree_clean": true,
+    "relation_to_running_images": "unconfirmed",
+    "reason": "The running application images do not expose an OCI revision label; the source commit timestamp is later than both application image creation timestamps."
+  },
+  "images": [
+    {
+      "role": "application-master",
+      "container": "new-api-cn2-master",
+      "container_id": "c8cc8744668d",
+      "image_ref": "newapi-migration-runtime:ccswitch-20260923-compat",
+      "image_id": "sha256:f4ed846ae7859bed86478a25e347daa2c8726c0c5e9e2d2d3220b08714fb2e13",
+      "repo_digest": "newapi-migration-runtime@sha256:f4ed846ae7859bed86478a25e347daa2c8726c0c5e9e2d2d3220b08714fb2e13",
+      "created": "2026-09-23T19:39:42.502145417+08:00",
+      "architecture": "amd64",
+      "os": "linux",
+      "size_bytes": 78058100,
+      "ghcr_target": "ghcr.io/taow41866-collab/new-api:production-baseline-20260924-master",
+      "mirror_status": "pending"
+    },
+    {
+      "role": "application-slave",
+      "container": "new-api-cn2-slave",
+      "container_id": "27851e7d2045",
+      "image_ref": "newapi-migration-runtime:20260920",
+      "image_id": "sha256:61ec23d939c49cb0732b9d48c923de480f006d3edd8fc1e5ae227feddaa620b8",
+      "repo_digest": "newapi-migration-runtime@sha256:61ec23d939c49cb0732b9d48c923de480f006d3edd8fc1e5ae227feddaa620b8",
+      "created": "2026-09-21T00:42:55.602449511+08:00",
+      "architecture": "amd64",
+      "os": "linux",
+      "size_bytes": 101472285,
+      "ghcr_target": "ghcr.io/taow41866-collab/new-api:production-baseline-20260924-slave",
+      "mirror_status": "pending"
+    },
+    {
+      "role": "reverse-proxy",
+      "containers": ["new-api-cn2-caddy", "subscription-cards-preview"],
+      "image_ref": "caddy:2.11.4",
+      "image_id": "sha256:14a9c00d4e833ebc2b65d36515b37bde3b73f0b323a2663aaafc88953d8c4e3f",
+      "repo_digest": "caddy@sha256:14a9c00d4e833ebc2b65d36515b37bde3b73f0b323a2663aaafc88953d8c4e3f",
+      "created": "2026-09-17T21:58:14.570053739Z",
+      "architecture": "amd64",
+      "os": "linux",
+      "size_bytes": 23953883,
+      "mirror_status": "public-upstream-digest-recorded"
+    },
+    {
+      "role": "database",
+      "container": "new-api-cn2-mysql",
+      "image_ref": "mysql:8.0.46",
+      "image_id": "sha256:7dcddc01f13bab2f15cde676d44d01f61fc9f99fe7785e86196dfc07d358ae2b",
+      "repo_digest": "mysql@sha256:7dcddc01f13bab2f15cde676d44d01f61fc9f99fe7785e86196dfc07d358ae2b",
+      "created": "2026-05-04T23:01:20.676190479Z",
+      "architecture": "amd64",
+      "os": "linux",
+      "size_bytes": 233594134,
+      "mirror_status": "public-upstream-digest-recorded"
+    }
+  ],
+  "containers": [
+    {
+      "name": "new-api-cn2-master",
+      "status": "running",
+      "started_at": "2026-09-23T11:42:44.4325168Z",
+      "restart_count": 0,
+      "compose_project": "new-api-cn2",
+      "compose_service": "master",
+      "compose_config_hash": "2860f67019d334443bb44f8d540c14c5c1bb56f6f9f09470f77becb7bed87095",
+      "mounts": ["/srv/new-api/cn2-20260921/master-data:/data", "/srv/new-api/cn2-20260921/master-logs:/logs"],
+      "environment_names_only": ["ALIPAY_APP_ID", "ALIPAY_GATEWAY", "BATCH_UPDATE_ENABLED", "GIN_MODE", "MEMORY_CACHE_ENABLED", "NODE_TYPE", "PATH", "PORT", "RELAY_RESPONSE_HEADER_TIMEOUT", "RELAY_TIMEOUT", "SESSION_COOKIE_SECURE", "SESSION_COOKIE_TRUSTED_URL", "SESSION_SECRET", "SQL_DSN", "STREAMING_TIMEOUT", "TASK_PLUGIN_ENABLED", "TRUSTED_PROXIES", "TZ"]
+    },
+    {
+      "name": "new-api-cn2-slave",
+      "status": "running",
+      "started_at": "2026-09-22T17:58:41.824676361Z",
+      "restart_count": 0,
+      "compose_project": "new-api-cn2",
+      "compose_service": "slave",
+      "compose_config_hash": "897b64f8b896aa1126671522874975e6d63dc67eae658ea3353fa2e8cbe41684",
+      "mounts": ["/srv/new-api/cn2-20260921/slave-data:/data", "/srv/new-api/cn2-20260921/slave-logs:/logs"],
+      "environment_names_only": ["ALIPAY_APP_ID", "ALIPAY_GATEWAY", "BATCH_UPDATE_ENABLED", "GIN_MODE", "MEMORY_CACHE_ENABLED", "NODE_TYPE", "PATH", "PORT", "RELAY_RESPONSE_HEADER_TIMEOUT", "RELAY_TIMEOUT", "SESSION_COOKIE_SECURE", "SESSION_COOKIE_TRUSTED_URL", "SESSION_SECRET", "SQL_DSN", "STREAMING_TIMEOUT", "TASK_PLUGIN_ENABLED", "TRUSTED_PROXIES", "TZ"]
+    }
+  ],
+  "configuration_hashes": [
+    {
+      "path": "/srv/new-api/cn2-20260921/Caddyfile",
+      "sha256": "9e1711d216241a28e533fa5f92d24245666b564ceb140dbd5713805656e1b9d9"
+    },
+    {
+      "path": "/srv/new-api/cn2-20260921/compose.json",
+      "sha256": "f18efc1aaf90f09a4e7baa64f0ac2831bccf6904769c056c0b280546c6142cbe"
+    },
+    {
+      "path": "/srv/new-api/cn2-20260921/compose.ccswitch-20260923.json",
+      "sha256": "f18efc1aaf90f09a4e7baa64f0ac2831bccf6904769c056c0b280546c6142cbe"
+    }
+  ],
+  "database": {
+    "engine_image": "mysql:8.0.46",
+    "migration_version": null,
+    "migration_version_status": "not-collected",
+    "reason": "No migration identifier was exposed by the read-only container metadata; no production SQL query was executed in this collection step."
+  },
+  "ghcr": {
+    "registry": "ghcr.io",
+    "repository": "ghcr.io/taow41866-collab/new-api",
+    "visibility": "private-required",
+    "mirror_status": "pending",
+    "reason": "The local environment has no GHCR CLI session or registry copy tool; no production-side push was attempted."
+  },
+  "verification": {
+    "production_containers_changed": false,
+    "production_database_changed": false,
+    "production_configuration_changed": false,
+    "source_to_image_mapping": "unconfirmed",
+    "next_required_action": "Mirror the two application image digests to private GHCR from an authenticated isolated runner, then update mirror digests in this manifest."
+  }
+}
