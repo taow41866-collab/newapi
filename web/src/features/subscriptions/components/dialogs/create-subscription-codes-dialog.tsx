@@ -20,8 +20,10 @@ import { handleServerError } from '@/lib/handle-server-error'
 import { requireServerSuccess } from '@/lib/server-error-message'
 
 import { createSubscriptionRedemptions, getAdminPlans } from '../../api'
-import { getSubscriptionCardKind } from '../../lib/redemption'
-import type { SubscriptionCardKind } from '../../lib/redemption'
+import {
+  getSubscriptionCardKind,
+  type SubscriptionCardKind,
+} from '../../lib/redemption'
 import type { PlanRecord } from '../../types'
 import { useSubscriptions } from '../subscriptions-provider'
 
