@@ -13,8 +13,8 @@ export function getSubscriptionCardKind(
     plan.duration_unit !== 'day' ||
     plan.quota_reset_period !== 'daily' ||
     plan.allow_wallet_overflow !== false ||
-    plan.daily_input_token_limit <= 0 ||
-    plan.daily_output_token_limit <= 0 ||
+    (plan.daily_input_token_limit ?? 0) <= 0 ||
+    (plan.daily_output_token_limit ?? 0) <= 0 ||
     plan.upgrade_group ||
     plan.downgrade_group
   ) {
