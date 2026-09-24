@@ -1,0 +1,176 @@
+{
+  "schema_version": 1,
+  "captured_at": "2026-09-24T14:29:31.0113870Z",
+  "repository": {
+    "name": "taow41866-collab/newapi",
+    "baseline_branch": "baseline/production-20260924",
+    "baseline_tag": "production-baseline-20260924-complete",
+    "source_worktree_changes_preserved": true
+  },
+  "standard": {
+    "source_to_image_mapping": "confirmed only when source tree, build parameters, and /new-api binary SHA256 all match",
+    "image_digest_role": "辅助证据，不作为源码同源结论"
+  },
+  "build": {
+    "dockerfile_sha256": "e52a33cf10311ab8b6816db16ed00a8d754d6cb5eefbaf8d0c402c09815008f8",
+    "dockerfile_source": "repository Dockerfile; temporary provenance build file only changed package mirrors",
+    "target_os": "linux",
+    "target_arch": "amd64",
+    "provenance": false,
+    "sbom": false,
+    "version": "E52A33CF10311AB8B6816DB16ED00A8D754D6CB5EEFBAF8D0C402C09815008F8",
+    "base_images": {
+      "bun": "oven/bun:1.4.0@sha256:5ff609364c049b54eb0ff560ec96319729a972078ef2c755d758f0c6ef89c2d6",
+      "go": "golang:1.26.1-alpine@sha256:2389ebfa5b7f43eeafbd6be0c3700cc46690ef842ad962f6c5bd6be49ed82039",
+      "runtime": "debian:bookworm-slim@sha256:f06537653ac770703bc45b4b113475bd402f451e85223f0f2837acbf89ab020a"
+    },
+    "network_mirrors": {
+      "bun_registry": "https://registry.npmmirror.com",
+      "go_proxy": "https://goproxy.cn,direct",
+      "debian_mirror": "http://mirrors.aliyun.com"
+    }
+  },
+  "production_images": [
+    {
+      "role": "master",
+      "container": "new-api-cn2-master",
+      "container_id": "c8cc8744668dcbf1a9078349ff72691cae30eec1d461a918edfc533f7a708c36",
+      "image_ref": "newapi-migration-runtime:ccswitch-20260923-compat",
+      "image_digest": "sha256:f4ed846ae7859bed86478a25e347daa2c8726c0c5e9e2d2d3220b08714fb2e13",
+      "ghcr_ref": "ghcr.io/taow41866-collab/new-api:production-baseline-20260924-master",
+      "ghcr_digest": "sha256:f4ed846ae7859bed86478a25e347daa2c8726c0c5e9e2d2d3220b08714fb2e13",
+      "architecture": "amd64",
+      "os": "linux",
+      "binary_path": "/new-api",
+      "binary_sha256": "5155ea95f830504a44738f00b482206543d29c9d905bd63b9b9cd53abc77348a",
+      "binary_size_bytes": 138379426
+    },
+    {
+      "role": "slave",
+      "container": "new-api-cn2-slave",
+      "container_id": "27851e7d20451cafe1b1654ea1e444702e9a0917bef3f87594c75340e4fd30e6",
+      "image_ref": "newapi-migration-runtime:20260920",
+      "image_digest": "sha256:61ec23d939c49cb0732b9d48c923de480f006d3edd8fc1e5ae227feddaa620b8",
+      "ghcr_ref": "ghcr.io/taow41866-collab/new-api:production-baseline-20260924-slave",
+      "ghcr_digest": "sha256:61ec23d939c49cb0732b9d48c923de480f006d3edd8fc1e5ae227feddaa620b8",
+      "architecture": "amd64",
+      "os": "linux",
+      "binary_path": "/app/new-api",
+      "binary_sha256": "cdae19c7edff033382ceec8b95f50aa23c9bed24cea08a41653cf490eee15346",
+      "binary_size_bytes": 130855074
+    }
+  ],
+  "candidates": [
+    {
+      "id": "hong-kong-opt-newapi-v1",
+      "source_path": "/opt/newapi-v1",
+      "refs": [],
+      "commit": "3dbcf7182660bd686ad9849577bd5af7c5ed1219",
+      "tree": "f664ff430fef41e5a31e5e130b0bff4bd3617966",
+      "working_tree_clean": true,
+      "dockerfile_sha256": "e52a33cf10311ab8b6816db16ed00a8d754d6cb5eefbaf8d0c402c09815008f8",
+      "version": "E52A33CF10311AB8B6816DB16ED00A8D754D6CB5EEFBAF8D0C402C09815008F8",
+      "build_image_digest": "sha256:9783fdd464a4c8f0c2d293731150fc4b626505825d19ec640ac0531eb07889f8",
+      "binary_sha256": "2bcc05dfb069ab4448d8ce0f00c449ff0620fcf562713ec928f4b4cf37834474",
+      "binary_size_bytes": 138399906,
+      "build_parameters": {
+        "TARGETOS": "linux",
+        "TARGETARCH": "amd64",
+        "provenance": false,
+        "sbom": false
+      },
+      "matches": {
+        "source_tree": null,
+        "build_parameters": true,
+        "master_binary_sha256": false,
+        "slave_binary_sha256": false,
+        "overall": false
+      },
+      "status": "unconfirmed",
+      "failure_reason": "Running images expose no OCI source revision or build provenance, and this candidate binary SHA256 matches neither archived production binary. The Hong Kong source commit is also newer than both production image creation timestamps."
+    },
+    {
+      "id": "git-confirmed-release",
+      "source_path": "tmp-newapi-upstream",
+      "refs": ["baseline git_base_commit"],
+      "commit": "0b66b0d1cf49b2602bdd45445c628f0a24e39473",
+      "tree": "274fbff87816236a4c8244f0791ebb79930c65c1",
+      "working_tree_clean": true,
+      "dockerfile_sha256": "e52a33cf10311ab8b6816db16ed00a8d754d6cb5eefbaf8d0c402c09815008f8",
+      "version": "E52A33CF10311AB8B6816DB16ED00A8D754D6CB5EEFBAF8D0C402C09815008F8",
+      "build_image_digest": "sha256:d37afda5b792b7456e6f933b6fb049fcf597f4c5f048c8dd10533870997525aa",
+      "binary_sha256": "6d4938c48c16a083b3494466e0d4d0ae71b08ac10e2d2aa671c0669f54bb5371",
+      "binary_size_bytes": 138444962,
+      "build_parameters": {
+        "TARGETOS": "linux",
+        "TARGETARCH": "amd64",
+        "provenance": false,
+        "sbom": false
+      },
+      "matches": {
+        "source_tree": null,
+        "build_parameters": true,
+        "master_binary_sha256": false,
+        "slave_binary_sha256": false,
+        "overall": false
+      },
+      "status": "unconfirmed",
+      "failure_reason": "No OCI revision/provenance maps either production image to this commit, and the reproducible-build candidate binary SHA256 matches neither master nor slave."
+    },
+    {
+      "id": "color-fix-staging",
+      "source_path": "tmp-newapi-upstream",
+      "refs": ["refs/heads/color-fix-staging", "user-origin/color-fix-staging"],
+      "commit": "0b66b0d1cf49b2602bdd45445c628f0a24e39473",
+      "tree": "274fbff87816236a4c8244f0791ebb79930c65c1",
+      "working_tree_clean": true,
+      "dockerfile_sha256": "e52a33cf10311ab8b6816db16ed00a8d754d6cb5eefbaf8d0c402c09815008f8",
+      "version": "E52A33CF10311AB8B6816DB16ED00A8D754D6CB5EEFBAF8D0C402C09815008F8",
+      "build_image_digest": "sha256:d37afda5b792b7456e6f933b6fb049fcf597f4c5f048c8dd10533870997525aa",
+      "binary_sha256": "6d4938c48c16a083b3494466e0d4d0ae71b08ac10e2d2aa671c0669f54bb5371",
+      "binary_size_bytes": 138444962,
+      "build_parameters": {
+        "TARGETOS": "linux",
+        "TARGETARCH": "amd64",
+        "provenance": false,
+        "sbom": false
+      },
+      "matches": {
+        "source_tree": null,
+        "build_parameters": true,
+        "master_binary_sha256": false,
+        "slave_binary_sha256": false,
+        "overall": false
+      },
+      "status": "unconfirmed",
+      "failure_reason": "This ref resolves to the same commit/tree as the confirmed release candidate; no OCI revision/provenance is present and its binary SHA256 matches neither archived production binary."
+    }
+  ],
+  "source_mapping_evidence": {
+    "oci_revision_label": null,
+    "build_provenance": null,
+    "hong_kong_git_head": "3dbcf7182660bd686ad9849577bd5af7c5ed1219",
+    "ci_build_record": null,
+    "image_contains_source": false,
+    "resolution": "unconfirmed",
+    "unconfirmed_fields": [
+      "OCI revision label absent from both production images",
+      "Build provenance unavailable for both production images",
+      "No CI build record linking either production digest to a candidate commit",
+      "No production image/source tree binary SHA256 match"
+    ]
+  },
+  "verification": {
+    "master_digest_matches_ghcr": true,
+    "slave_digest_matches_ghcr": true,
+    "production_container_ids_unchanged": true,
+    "production_start_times_unchanged": true,
+    "production_restart_counts_unchanged": true,
+    "production_database_changed": false,
+    "production_configuration_changed": false,
+    "git_diff_check": "passed",
+    "json_schema_check": "passed",
+    "production_modified": false,
+    "conclusion": "镜像已归档，但源码同源未确认"
+  }
+}
