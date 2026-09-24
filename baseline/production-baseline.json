@@ -38,7 +38,7 @@
       "os": "linux",
       "size_bytes": 78058100,
       "ghcr_target": "ghcr.io/taow41866-collab/new-api:production-baseline-20260924-master",
-      "mirror_status": "pending"
+      "mirror_status": "blocked-missing-packages-write"
     },
     {
       "role": "application-slave",
@@ -52,7 +52,7 @@
       "os": "linux",
       "size_bytes": 101472285,
       "ghcr_target": "ghcr.io/taow41866-collab/new-api:production-baseline-20260924-slave",
-      "mirror_status": "pending"
+      "mirror_status": "blocked-missing-packages-write"
     },
     {
       "role": "reverse-proxy",
@@ -127,14 +127,14 @@
     "registry": "ghcr.io",
     "repository": "ghcr.io/taow41866-collab/new-api",
     "visibility": "private-required",
-    "mirror_status": "pending",
-    "reason": "The local environment has no GHCR CLI session or registry copy tool; no production-side push was attempted."
+    "mirror_status": "blocked-missing-packages-write",
+    "reason": "GHCR login succeeded, but the registry rejected the push with permission_denied because the GitHub credential lacks packages:write. The repository is public, so a Release or Git LFS fallback is not safe for production images."
   },
   "verification": {
     "production_containers_changed": false,
     "production_database_changed": false,
     "production_configuration_changed": false,
     "source_to_image_mapping": "unconfirmed",
-    "next_required_action": "Mirror the two application image digests to private GHCR from an authenticated isolated runner, then update mirror digests in this manifest."
+    "next_required_action": "Provide a private GHCR package target or a GitHub credential with packages:write, then mirror both application image digests from an isolated runner and record the resulting GHCR digests."
   }
 }
