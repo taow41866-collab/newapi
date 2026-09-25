@@ -1,6 +1,27 @@
 package operation_setting
 
-import "github.com/QuantumNous/new-api/setting/config"
+import (
+	"net/url"
+	"strings"
+
+	"github.com/QuantumNous/new-api/setting/config"
+)
+
+const DefaultDocsLink = "https://lpss.online/docs/"
+
+// NormalizeDocsLink upgrades the retired production docs host while preserving
+// operator-supplied documentation URLs.
+func NormalizeDocsLink(value string) string {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return trimmed
+	}
+	parsed, err := url.Parse(trimmed)
+	if err == nil && strings.EqualFold(parsed.Hostname(), "hk.zhongzhuan.de5.net") {
+		return DefaultDocsLink
+	}
+	return trimmed
+}
 
 // 额度展示类型
 const (
@@ -24,7 +45,7 @@ type GeneralSetting struct {
 
 // 默认配置
 var generalSetting = GeneralSetting{
-	DocsLink:                   "https://docs.newapi.pro/zh",
+	DocsLink:                   DefaultDocsLink,
 	PingIntervalEnabled:        false,
 	PingIntervalSeconds:        60,
 	QuotaDisplayType:           QuotaDisplayTypeUSD,
