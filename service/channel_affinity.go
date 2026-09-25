@@ -672,6 +672,19 @@ func ClearCurrentChannelAffinityCache(c *gin.Context) bool {
 	return false
 }
 
+// clearChannelAffinityAfterFailure clears only an affinity binding that was
+// actually used by the current request. A matched rule in session mode "off"
+// still carries metadata for request transforms but must not mutate its cache.
+func clearChannelAffinityAfterFailure(c *gin.Context) bool {
+	if c == nil {
+		return false
+	}
+	if _, used := c.Get(ginKeyChannelAffinityLogInfo); !used {
+		return false
+	}
+	return ClearCurrentChannelAffinityCache(c)
+}
+
 func ShouldKeepChannelAffinityOnChannelDisabled() bool {
 	setting := operation_setting.GetChannelAffinitySetting()
 	if setting == nil {

@@ -27,7 +27,8 @@ import { Combobox } from '@/components/ui/combobox'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
-import { getUserModels } from '@/lib/api'
+import { getTokenAutoGroups } from '@/features/keys/api'
+import { getSelf, getUserModels } from '@/lib/api'
 import { requireServerSuccess } from '@/lib/server-error-message'
 
 const APP_CONFIGS = {
@@ -94,6 +95,8 @@ interface Props {
   open: boolean
   onOpenChange: (open: boolean) => void
   tokenKey: string
+  group: string
+  autoGroups: string[]
 }
 
 export function CCSwitchDialog(props: Props) {
@@ -103,8 +106,27 @@ export function CCSwitchDialog(props: Props) {
   const [models, setModels] = useState<Record<string, string>>({})
 
   const { data: modelsData } = useQuery({
-    queryKey: ['user-models-ccswitch'],
-    queryFn: async () => requireServerSuccess(await getUserModels()),
+    queryKey: ['user-models-ccswitch', props.group, props.autoGroups],
+    queryFn: async () => {
+      if (props.group !== 'auto') {
+        const userGroup =
+          props.group || requireServerSuccess(await getSelf()).data?.group
+        if (!userGroup) return { success: true, data: [] }
+        return requireServerSuccess(await getUserModels(userGroup))
+      }
+
+      const groups =
+        props.autoGroups.length > 0
+          ? props.autoGroups
+          : requireServerSuccess(await getTokenAutoGroups()).data?.groups ?? []
+      const responses = await Promise.all(
+        groups.map((group) => getUserModels(group))
+      )
+      const models = responses.flatMap((response) =>
+        requireServerSuccess(response).data ?? []
+      )
+      return { success: true, data: [...new Set(models)] }
+    },
     enabled: props.open,
     staleTime: 5 * 60 * 1000,
   })

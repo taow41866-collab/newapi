@@ -66,13 +66,13 @@ func TestSubscriptionV1AccessAndCustomerPurchaseGuards(t *testing.T) {
 
 	userToken := "subscription-v1-common-token"
 	user := model.User{
-		Username:   "subscription-v1-common",
-		Password:   "unused",
-		Role:       common.RoleCommonUser,
-		Status:     common.UserStatusEnabled,
-		Group:      "default",
-		AffCode:    "subscription-v1-common",
-		Quota:      userQuota,
+		Username:    "subscription-v1-common",
+		Password:    "unused",
+		Role:        common.RoleCommonUser,
+		Status:      common.UserStatusEnabled,
+		Group:       "default",
+		AffCode:     "subscription-v1-common",
+		Quota:       userQuota,
 		AccessToken: &userToken,
 	}
 	require.NoError(t, model.DB.Create(&user).Error)
@@ -82,6 +82,7 @@ func TestSubscriptionV1AccessAndCustomerPurchaseGuards(t *testing.T) {
 	router.Use(middleware.RequestId())
 	router.GET("/api/subscription/plans", middleware.UserAuth(), GetSubscriptionPlans)
 	router.GET("/api/subscription/admin/plans", middleware.AdminAuth(), AdminListSubscriptionPlans)
+	router.PATCH("/api/subscription/admin/plans/:id", middleware.AdminAuth(), AdminUpdateSubscriptionPlanStatus)
 	router.POST("/api/subscription/redeem", middleware.UserAuth(), RedeemSubscriptionCode)
 	router.POST("/api/subscription/balance/pay", middleware.UserAuth(), SubscriptionRequestBalancePay)
 	router.POST("/api/subscription/epay/pay", middleware.UserAuth(), SubscriptionRequestEpay)
@@ -98,7 +99,7 @@ func TestSubscriptionV1AccessAndCustomerPurchaseGuards(t *testing.T) {
 	}
 
 	var visible struct {
-		Success bool `json:"success"`
+		Success bool                  `json:"success"`
 		Data    []SubscriptionPlanDTO `json:"data"`
 	}
 	response := request(http.MethodGet, "/api/subscription/plans", "", userToken)
@@ -112,7 +113,7 @@ func TestSubscriptionV1AccessAndCustomerPurchaseGuards(t *testing.T) {
 	response = request(http.MethodGet, "/api/subscription/admin/plans", "", adminToken)
 	require.Equal(t, http.StatusOK, response.Code)
 	var adminVisible struct {
-		Success bool `json:"success"`
+		Success bool                  `json:"success"`
 		Data    []SubscriptionPlanDTO `json:"data"`
 	}
 	require.NoError(t, common.Unmarshal(response.Body.Bytes(), &adminVisible))
@@ -148,6 +149,10 @@ func TestSubscriptionV1AccessAndCustomerPurchaseGuards(t *testing.T) {
 	require.NoError(t, model.DB.Model(&model.UserSubscription{}).Where("user_id = ? AND plan_id = ?", user.Id, v1PlanID).Count(&subscriptionsAfterRejectedPurchase).Error)
 	assert.Zero(t, subscriptionsAfterRejectedPurchase, "rejected direct purchases must not grant a subscription")
 
+	// Issuing operational redemption cards is independent from enabling
+	// customer-facing payment plans.
+	paymentSetting.ComplianceConfirmed = false
+	paymentSetting.ComplianceTermsVersion = ""
 	createCodeRequest := `{"name":"admin-created","count":1,"plan_id":92002,"kind":"day","expired_time":0}`
 	response = request(http.MethodPost, "/api/redemption/subscription", createCodeRequest, userToken)
 	assert.Equal(t, http.StatusForbidden, response.Code, "regular users must not issue subscription codes")
@@ -160,6 +165,8 @@ func TestSubscriptionV1AccessAndCustomerPurchaseGuards(t *testing.T) {
 	require.NoError(t, common.Unmarshal(response.Body.Bytes(), &createdCodes))
 	require.True(t, createdCodes.Success)
 	require.Len(t, createdCodes.Data, 1)
+	paymentSetting.ComplianceConfirmed = true
+	paymentSetting.ComplianceTermsVersion = operation_setting.CurrentComplianceTermsVersion
 	codeBody, err := common.Marshal(map[string]string{"key": createdCodes.Data[0]})
 	require.NoError(t, err)
 	response = request(http.MethodPost, "/api/subscription/redeem", string(codeBody), userToken)
@@ -173,6 +180,23 @@ func TestSubscriptionV1AccessAndCustomerPurchaseGuards(t *testing.T) {
 	var storedUser model.User
 	require.NoError(t, model.DB.First(&storedUser, user.Id).Error)
 	assert.Equal(t, userQuota, storedUser.Quota, "V1 redemption must not modify wallet quota")
+
+	// Operationally disabling a plan must remain available even before payment
+	// compliance is confirmed; it is the safety switch used to stop new usage.
+	paymentSetting.ComplianceConfirmed = false
+	paymentSetting.ComplianceTermsVersion = ""
+	response = request(http.MethodPatch, "/api/subscription/admin/plans/92002", `{"enabled":false}`, adminToken)
+	require.Equal(t, http.StatusOK, response.Code)
+	var statusResult struct {
+		Success bool `json:"success"`
+	}
+	require.NoError(t, common.Unmarshal(response.Body.Bytes(), &statusResult))
+	assert.True(t, statusResult.Success)
+	var disabledPlan model.SubscriptionPlan
+	require.NoError(t, model.DB.First(&disabledPlan, v1PlanID).Error)
+	assert.False(t, disabledPlan.Enabled)
+	paymentSetting.ComplianceConfirmed = true
+	paymentSetting.ComplianceTermsVersion = operation_setting.CurrentComplianceTermsVersion
 	var subscriptionCount int64
 	require.NoError(t, model.DB.Model(&model.UserSubscription{}).Where("user_id = ? AND plan_id = ?", user.Id, v1PlanID).Count(&subscriptionCount).Error)
 	assert.EqualValues(t, 1, subscriptionCount)

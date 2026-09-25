@@ -65,6 +65,14 @@ export const userSubscriptionSchema = z.object({
   id: z.number(),
   user_id: z.number(),
   plan_id: z.number(),
+  price_amount: z.number().optional(),
+  currency: z.string().optional(),
+  billing_policy: z.string().optional(),
+  service_model: z.string().optional(),
+  daily_input_token_limit: z.number().optional(),
+  daily_output_token_limit: z.number().optional(),
+  daily_input_tokens_used: z.number().optional(),
+  daily_output_tokens_used: z.number().optional(),
   status: z.string(),
   source: z.string().optional(),
   start_time: z.number(),
@@ -78,6 +86,10 @@ export type UserSubscription = z.infer<typeof userSubscriptionSchema>
 
 export interface UserSubscriptionRecord {
   subscription: UserSubscription
+  plan_display?: Pick<
+    SubscriptionPlan,
+    'title' | 'subtitle' | 'duration_unit' | 'duration_value'
+  >
 }
 
 // ============================================================================

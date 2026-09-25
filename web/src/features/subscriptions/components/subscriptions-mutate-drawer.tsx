@@ -17,6 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { zodResolver } from '@hookform/resolvers/zod'
+import { useQueryClient } from '@tanstack/react-query'
 import { CalendarClock, CreditCard, RefreshCw, Settings2 } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { useForm, type Resolver } from 'react-hook-form'
@@ -97,6 +98,7 @@ export function SubscriptionsMutateDrawer({
   const { t } = useTranslation()
   const isEdit = !!currentRow?.plan?.id
   const { triggerRefresh, createPeriod } = useSubscriptions()
+  const queryClient = useQueryClient()
   const { meta: currencyMeta } = getCurrencyDisplay()
   const tokensOnly = currencyMeta.kind === 'tokens'
   const currencyLabel = getCurrencyLabel()
@@ -174,6 +176,9 @@ export function SubscriptionsMutateDrawer({
           toast.success(t('Update succeeded'))
           onOpenChange(false)
           triggerRefresh()
+          await queryClient.invalidateQueries({
+            queryKey: ['admin-subscription-card-plans'],
+          })
         } else {
           handleServerError(res)
         }
@@ -183,6 +188,9 @@ export function SubscriptionsMutateDrawer({
           toast.success(t('Create succeeded'))
           onOpenChange(false)
           triggerRefresh()
+          await queryClient.invalidateQueries({
+            queryKey: ['admin-subscription-card-plans'],
+          })
         } else {
           handleServerError(res)
         }

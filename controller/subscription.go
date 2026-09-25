@@ -361,10 +361,6 @@ type AdminUpdateSubscriptionPlanStatusRequest struct {
 }
 
 func AdminUpdateSubscriptionPlanStatus(c *gin.Context) {
-	if !requirePaymentCompliance(c) {
-		return
-	}
-
 	id, _ := strconv.Atoi(c.Param("id"))
 	if id <= 0 {
 		common.ApiErrorMsg(c, "无效的ID")

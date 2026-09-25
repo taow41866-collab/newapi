@@ -36,6 +36,8 @@ export function ApiKeysDialogs() {
         open={open === 'cc-switch'}
         onOpenChange={(isOpen) => !isOpen && setOpen(null)}
         tokenKey={resolvedKey}
+        group={currentRow?.group ?? ''}
+        autoGroups={currentRow?.auto_groups ?? []}
       />
     </>
   )

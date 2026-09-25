@@ -23,9 +23,29 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { CCSwitchDialog } from '../cc-switch-dialog'
 
+const { getUserModels, getTokenAutoGroups, getSelf } = vi.hoisted(() => ({
+  getUserModels: vi.fn(),
+  getTokenAutoGroups: vi.fn(),
+  getSelf: vi.fn(),
+}))
+
+vi.mock('@/lib/api', () => ({ getSelf, getUserModels }))
+vi.mock('@/features/keys/api', () => ({ getTokenAutoGroups }))
+
 let queryClient: QueryClient
 
 beforeEach(() => {
+  getUserModels.mockReset()
+  getTokenAutoGroups.mockReset()
+  getSelf.mockReset()
+  getUserModels.mockImplementation(async (group: string) => ({
+    success: true,
+    data:
+      group === 'vip'
+        ? ['vip-model', 'vip-sonnet-model']
+        : ['default-model'],
+  }))
+  getSelf.mockResolvedValue({ success: true, data: { group: 'vip' } })
   queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false, gcTime: Infinity } },
   })
@@ -35,14 +55,16 @@ afterEach(() => {
   queryClient.clear()
 })
 
-function renderDialog(models = ['gpt-5.4', 'claude-sonnet-4-6']) {
-  queryClient.setQueryData(['user-models-ccswitch'], {
-    success: true,
-    data: models,
-  })
+function renderDialog(group = 'vip', autoGroups: string[] = []) {
   render(
     <QueryClientProvider client={queryClient}>
-      <CCSwitchDialog open onOpenChange={vi.fn()} tokenKey='test-only' />
+      <CCSwitchDialog
+        open
+        onOpenChange={vi.fn()}
+        tokenKey='test-only'
+        group={group}
+        autoGroups={autoGroups}
+      />
     </QueryClientProvider>
   )
 }
@@ -64,10 +86,12 @@ describe('CC Switch model selection', () => {
       // The dialog is translated and clips overflow. Its popup must escape
       // that containing block to remain aligned and fully visible.
       expect(dialog).not.toContainElement(list)
-      await user.click(screen.getByRole('option', { name: 'gpt-5.4' }))
-      await waitFor(() => expect(input).toHaveValue('gpt-5.4'))
+      await user.click(screen.getByRole('option', { name: 'vip-model' }))
+      await waitFor(() => expect(input).toHaveValue('vip-model'))
       expect(input).toHaveAttribute('aria-expanded', 'false')
       expect(dialog).toBeVisible()
+      expect(getUserModels).toHaveBeenCalledWith('vip')
+      expect(screen.queryByRole('option', { name: 'default-model' })).toBeNull()
     }
   )
 
@@ -80,23 +104,21 @@ describe('CC Switch model selection', () => {
     await user.type(input, 'sonnet')
 
     expect(
-      screen.queryByRole('option', { name: 'gpt-5.4' })
-    ).not.toBeInTheDocument()
-    expect(
-      screen.getByRole('option', { name: 'claude-sonnet-4-6' })
+      screen.getByRole('option', { name: 'vip-sonnet-model' })
     ).toBeVisible()
     await user.keyboard('{ArrowDown}{Enter}')
-    await waitFor(() => expect(input).toHaveValue('claude-sonnet-4-6'))
+    await waitFor(() => expect(input).toHaveValue('vip-sonnet-model'))
     await user.click(input)
     await user.keyboard('{Escape}')
 
-    expect(input).toHaveValue('claude-sonnet-4-6')
+    expect(input).toHaveValue('vip-sonnet-model')
     expect(input).toHaveAttribute('aria-expanded', 'false')
     expect(screen.getByRole('dialog')).toBeVisible()
   })
 
   it('shows an empty result when no models are available and updates an open dropdown when models arrive', async () => {
-    renderDialog([])
+    getUserModels.mockResolvedValueOnce({ success: true, data: [] })
+    renderDialog()
     const user = userEvent.setup()
     await user.click(screen.getByRole('radio', { name: 'Codex' }))
     const input = screen.getByRole('combobox', { name: 'Primary Model' })
@@ -104,13 +126,54 @@ describe('CC Switch model selection', () => {
 
     expect(await screen.findByText('No models found')).toBeVisible()
     await act(async () => {
-      queryClient.setQueryData(['user-models-ccswitch'], {
+      queryClient.setQueryData(['user-models-ccswitch', 'vip', []], {
         success: true,
-        data: ['gpt-5.4'],
+        data: ['vip-model'],
       })
     })
-    await user.click(await screen.findByRole('option', { name: 'gpt-5.4' }))
-    await waitFor(() => expect(input).toHaveValue('gpt-5.4'))
+    await user.click(await screen.findByRole('option', { name: 'vip-model' }))
+    await waitFor(() => expect(input).toHaveValue('vip-model'))
+  })
+
+  it('loads only the auto groups assigned to this key', async () => {
+    renderDialog('auto', ['vip'])
+    const user = userEvent.setup()
+    await user.click(screen.getByRole('radio', { name: 'Codex' }))
+    await user.click(screen.getByRole('button', { name: 'Primary Model' }))
+
+    expect(await screen.findByRole('option', { name: 'vip-model' })).toBeVisible()
+    expect(screen.queryByRole('option', { name: 'default-model' })).toBeNull()
+    expect(getUserModels).toHaveBeenCalledTimes(1)
+    expect(getUserModels).toHaveBeenCalledWith('vip')
+    expect(getTokenAutoGroups).not.toHaveBeenCalled()
+  })
+
+  it('uses the account Auto groups when this key inherits the global order', async () => {
+    getTokenAutoGroups.mockResolvedValueOnce({
+      success: true,
+      data: { groups: ['vip', 'default'], max_count: 2 },
+    })
+    renderDialog('auto')
+    const user = userEvent.setup()
+    await user.click(screen.getByRole('radio', { name: 'Codex' }))
+    await user.click(screen.getByRole('button', { name: 'Primary Model' }))
+
+    expect(await screen.findByRole('option', { name: 'vip-model' })).toBeVisible()
+    expect(screen.getByRole('option', { name: 'default-model' })).toBeVisible()
+    expect(getUserModels).toHaveBeenCalledWith('vip')
+    expect(getUserModels).toHaveBeenCalledWith('default')
+  })
+
+  it('falls back to the account group for legacy keys without a stored group', async () => {
+    renderDialog('')
+    const user = userEvent.setup()
+    await user.click(screen.getByRole('radio', { name: 'Codex' }))
+    await user.click(screen.getByRole('button', { name: 'Primary Model' }))
+
+    expect(await screen.findByRole('option', { name: 'vip-model' })).toBeVisible()
+    expect(screen.queryByRole('option', { name: 'default-model' })).toBeNull()
+    expect(getSelf).toHaveBeenCalledOnce()
+    expect(getUserModels).toHaveBeenCalledWith('vip')
   })
 
   it('lets users edit the provider name without opening a model dropdown', async () => {

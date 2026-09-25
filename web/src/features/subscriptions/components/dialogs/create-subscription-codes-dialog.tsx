@@ -40,14 +40,18 @@ export function CreateSubscriptionCodesDialog() {
   const [name, setName] = useState('')
   const [count, setCount] = useState('1')
   const [planId, setPlanId] = useState('')
-  const [expiredDate, setExpiredDate] = useState('')
   const [codes, setCodes] = useState<string[]>([])
   const [isCreating, setIsCreating] = useState(false)
 
-  const { data: plans = [], isLoading, isError } = useQuery({
+  const {
+    data: plans = [],
+    isLoading,
+    isError,
+  } = useQuery({
     queryKey: ['admin-subscription-card-plans'],
     queryFn: async () => requireServerSuccess(await getAdminPlans()).data || [],
     enabled: isOpen,
+    refetchOnMount: 'always',
   })
   const eligiblePlans = useMemo(
     () =>
@@ -57,9 +61,9 @@ export function CreateSubscriptionCodesDialog() {
       }),
     [plans]
   )
-  const selectedPlan = eligiblePlans.find(
-    ({ record }) => String(record.plan.id) === planId
-  ) || (!planId ? eligiblePlans[0] : undefined)
+  const selectedPlan =
+    eligiblePlans.find(({ record }) => String(record.plan.id) === planId) ||
+    (!planId ? eligiblePlans[0] : undefined)
   const parsedCount = Number(count)
   const isCountValid =
     Number.isInteger(parsedCount) && parsedCount >= 1 && parsedCount <= 100
@@ -68,7 +72,6 @@ export function CreateSubscriptionCodesDialog() {
     setName('')
     setCount('1')
     setPlanId('')
-    setExpiredDate('')
     setCodes([])
     setOpen(null)
   }
@@ -82,13 +85,6 @@ export function CreateSubscriptionCodesDialog() {
       return
     }
 
-    let expiredTime = 0
-    if (expiredDate) {
-      const expiry = new Date(`${expiredDate}T23:59:59`)
-      if (Number.isNaN(expiry.getTime())) return
-      expiredTime = Math.floor(expiry.getTime() / 1000)
-    }
-
     setIsCreating(true)
     try {
       const response = await createSubscriptionRedemptions({
@@ -96,7 +92,6 @@ export function CreateSubscriptionCodesDialog() {
         count: amount,
         plan_id: selectedPlan.record.plan.id,
         kind: selectedPlan.kind,
-        expired_time: expiredTime,
       })
       if (!response.success || !response.data?.length) {
         handleServerError(response, t('Failed to create subscription codes'))
@@ -156,7 +151,7 @@ export function CreateSubscriptionCodesDialog() {
               className='bg-muted/40 max-h-64 space-y-2 overflow-y-auto rounded-lg border p-3'
             >
               {codes.map((code) => (
-                <code key={code} className='block break-all text-sm'>
+                <code key={code} className='block text-sm break-all'>
                   {code}
                 </code>
               ))}
@@ -173,9 +168,7 @@ export function CreateSubscriptionCodesDialog() {
                 disabled={isLoading || eligiblePlans.length === 0}
               >
                 <NativeSelectOption value='' disabled>
-                  {isLoading
-                    ? t('Loading')
-                    : t('Select subscription plan')}
+                  {isLoading ? t('Loading') : t('Select subscription plan')}
                 </NativeSelectOption>
                 {eligiblePlans.map(({ record, kind }) => (
                   <NativeSelectOption
@@ -218,20 +211,6 @@ export function CreateSubscriptionCodesDialog() {
                 value={count}
                 onChange={(event) => setCount(event.target.value)}
                 required
-              />
-            </div>
-            <div className='space-y-2 sm:col-span-2'>
-              <Label htmlFor='subscription-code-expiry'>
-                {t('Expiration date')}{' '}
-                <span className='text-muted-foreground'>
-                  ({t('Optional')})
-                </span>
-              </Label>
-              <Input
-                id='subscription-code-expiry'
-                type='date'
-                value={expiredDate}
-                onChange={(event) => setExpiredDate(event.target.value)}
               />
             </div>
           </div>

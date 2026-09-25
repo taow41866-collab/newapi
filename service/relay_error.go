@@ -33,12 +33,20 @@ func DecideRelayRetry(c *gin.Context, err *types.NewAPIError, retryTimes int) Po
 		return PolicyDecision{Action: "stop", Reason: "pinned_channel", Source: "channel_constraint"}
 	}
 	if types.IsChannelError(err) {
+		// A retry must not leave the request affinity pinned to a channel that
+		// just failed. The next attempt can then select the next eligible
+		// priority, and the next request will not immediately reuse the failed
+		// channel if all fallbacks also fail.
+		clearChannelAffinityAfterFailure(c)
 		return PolicyDecision{Action: "retry", Reason: "channel_error", Source: "system"}
 	}
 	if types.IsSkipRetryError(err) {
 		return PolicyDecision{Action: "stop", Reason: "non_retryable_error", Source: "system"}
 	}
 	if retryTimes <= 0 {
+		if operation_setting.ShouldRetryByStatusCode(err.StatusCode) {
+			clearChannelAffinityAfterFailure(c)
+		}
 		return PolicyDecision{Action: "stop", Reason: "attempt_budget_exhausted", Source: "global"}
 	}
 	code := err.StatusCode
@@ -52,6 +60,7 @@ func DecideRelayRetry(c *gin.Context, err *types.NewAPIError, retryTimes int) Po
 		return PolicyDecision{Action: "stop", Reason: "system_retry_exclusion", Source: "system"}
 	}
 	if operation_setting.ShouldRetryByStatusCode(code) {
+		clearChannelAffinityAfterFailure(c)
 		return PolicyDecision{Action: "retry", Reason: "retry_status_matched", Source: "global"}
 	}
 	return PolicyDecision{Action: "stop", Reason: "status_not_retryable", Source: "global"}

@@ -33,12 +33,63 @@ func TestV1SubscriptionPlansAreRedeemOnly(t *testing.T) {
 	assert.False(t, IsSubscriptionPlanCustomerPurchasable(unknownPolicyPlan))
 }
 
+func TestRedeemedV1SubscriptionSummaryIncludesHiddenPlanDisplay(t *testing.T) {
+	userID, code, plan := setupSubscriptionRedemptionFixture(t)
+	plan.PriceAmount = 2.9
+	plan.Currency = "CNY"
+	require.NoError(t, DB.Model(plan).Updates(map[string]any{"price_amount": plan.PriceAmount, "currency": plan.Currency}).Error)
+	_, err := RedeemSubscription(code.Key, userID)
+	require.NoError(t, err)
+
+	summaries, err := GetAllUserSubscriptions(userID)
+	require.NoError(t, err)
+	require.Len(t, summaries, 1)
+	require.NotNil(t, summaries[0].PlanDisplay)
+	assert.Equal(t, "DS day", summaries[0].PlanDisplay.Title)
+	assert.Equal(t, SubscriptionDurationDay, summaries[0].PlanDisplay.DurationUnit)
+	assert.Equal(t, 1, summaries[0].PlanDisplay.DurationValue)
+	assert.Equal(t, 2.9, summaries[0].Subscription.PriceAmount)
+}
+
+func TestSubscriptionCardsStartDurationAtRedemption(t *testing.T) {
+	for _, test := range []struct {
+		kind string
+		days int
+	}{
+		{kind: "day", days: 1},
+		{kind: "week", days: 7},
+		{kind: "month", days: 30},
+	} {
+		t.Run(test.kind, func(t *testing.T) {
+			start := time.Unix(1_700_000_000, 0)
+			end, err := calcPlanEndTime(start, &SubscriptionPlan{DurationUnit: SubscriptionDurationDay, DurationValue: test.days})
+			require.NoError(t, err)
+			assert.Equal(t, int64(test.days)*24*60*60, end-start.Unix())
+		})
+	}
+}
+
+func TestSubscriptionRedemptionIgnoresPreRedemptionExpiry(t *testing.T) {
+	userID, _, plan := setupSubscriptionRedemptionFixture(t)
+	code, err := NewSubscriptionRedemption("day", plan.Id, SubscriptionV1ChannelID, SubscriptionV1Model, "no-pre-expiry", time.Now().Add(-time.Hour).Unix())
+	require.NoError(t, err)
+	assert.Zero(t, code.ExpiredTime)
+	require.NoError(t, code.Insert())
+	// A legacy row may still contain a pre-redemption expiry value. It must not
+	// prevent redemption after the policy changed to activation-time expiry.
+	require.NoError(t, DB.Model(code).Update("expired_time", time.Now().Add(-time.Hour).Unix()).Error)
+	_, err = RedeemSubscription(code.Key, userID)
+	require.NoError(t, err)
+}
+
 func TestSubscriptionV1ReserveSettleAndReplay(t *testing.T) {
 	userID, code, _ := setupSubscriptionRedemptionFixture(t)
 	sub, err := RedeemSubscription(code.Key, userID)
 	require.NoError(t, err)
 	require.NoError(t, DB.AutoMigrate(&SubscriptionV1Usage{}))
-	t.Cleanup(func() { require.NoError(t, DB.Where("user_subscription_id = ?", sub.Id).Delete(&SubscriptionV1Usage{}).Error) })
+	t.Cleanup(func() {
+		require.NoError(t, DB.Where("user_subscription_id = ?", sub.Id).Delete(&SubscriptionV1Usage{}).Error)
+	})
 	first, err := ReserveSubscriptionV1Tokens("v1-settle", userID, sub.Id, 24, SubscriptionV1Model, 100, 50)
 	require.NoError(t, err)
 	assert.False(t, first.Replay)
@@ -71,7 +122,9 @@ func TestSubscriptionV1RefundDoesNotCreditAnotherWindow(t *testing.T) {
 	sub, err := RedeemSubscription(code.Key, userID)
 	require.NoError(t, err)
 	require.NoError(t, DB.AutoMigrate(&SubscriptionV1Usage{}))
-	t.Cleanup(func() { require.NoError(t, DB.Where("user_subscription_id = ?", sub.Id).Delete(&SubscriptionV1Usage{}).Error) })
+	t.Cleanup(func() {
+		require.NoError(t, DB.Where("user_subscription_id = ?", sub.Id).Delete(&SubscriptionV1Usage{}).Error)
+	})
 	_, err = ReserveSubscriptionV1Tokens("v1-refund", userID, sub.Id, 24, SubscriptionV1Model, 100, 50)
 	require.NoError(t, err)
 	require.NoError(t, DB.First(sub, sub.Id).Error)
@@ -97,7 +150,9 @@ func TestSubscriptionV1ReservationBoundsAndConcurrentReplay(t *testing.T) {
 	sub, err := RedeemSubscription(code.Key, userID)
 	require.NoError(t, err)
 	require.NoError(t, DB.AutoMigrate(&SubscriptionV1Usage{}))
-	t.Cleanup(func() { require.NoError(t, DB.Where("user_subscription_id = ?", sub.Id).Delete(&SubscriptionV1Usage{}).Error) })
+	t.Cleanup(func() {
+		require.NoError(t, DB.Where("user_subscription_id = ?", sub.Id).Delete(&SubscriptionV1Usage{}).Error)
+	})
 	for _, tokens := range []int64{-1, 2_147_483_648, 50_000_001} {
 		_, err := ReserveSubscriptionV1Tokens("v1-bounds", userID, sub.Id, 24, SubscriptionV1Model, tokens, 1)
 		require.Error(t, err)
@@ -106,7 +161,10 @@ func TestSubscriptionV1ReservationBoundsAndConcurrentReplay(t *testing.T) {
 	require.Error(t, err)
 	_, err = ReserveSubscriptionV1Tokens("v1-channel", userID, sub.Id, 25, SubscriptionV1Model, 1, 1)
 	require.Error(t, err)
-	type outcome struct { result *SubscriptionV1UsageResult; err error }
+	type outcome struct {
+		result *SubscriptionV1UsageResult
+		err    error
+	}
 	results := make(chan outcome, 2)
 	var wg sync.WaitGroup
 	for range 2 {
@@ -120,7 +178,9 @@ func TestSubscriptionV1ReservationBoundsAndConcurrentReplay(t *testing.T) {
 	newReservations := 0
 	for result := range results {
 		require.NoError(t, result.err)
-		if !result.result.Replay { newReservations++ }
+		if !result.result.Replay {
+			newReservations++
+		}
 	}
 	assert.Equal(t, 1, newReservations)
 	require.NoError(t, DB.First(sub, sub.Id).Error)
@@ -395,7 +455,7 @@ func setupSubscriptionRedemptionFixture(t *testing.T) (int, *Redemption, *Subscr
 }
 
 func TestSubscriptionRedemptionRejectsInvalidStateAtomically(t *testing.T) {
-	for _, scenario := range []string{"disabled-plan", "missing-user", "disabled-user", "expired", "wrong-channel", "wrong-model", "wrong-kind", "overflow-enabled", "group-upgrade", "missing-plan", "wallet-card", "no-daily-reset"} {
+	for _, scenario := range []string{"disabled-plan", "missing-user", "disabled-user", "wrong-channel", "wrong-model", "wrong-kind", "overflow-enabled", "group-upgrade", "missing-plan", "wallet-card", "no-daily-reset"} {
 		t.Run(scenario, func(t *testing.T) {
 			userID, code, plan := setupSubscriptionRedemptionFixture(t)
 			switch scenario {
@@ -405,8 +465,6 @@ func TestSubscriptionRedemptionRejectsInvalidStateAtomically(t *testing.T) {
 				require.NoError(t, DB.Delete(&User{}, userID).Error)
 			case "disabled-user":
 				require.NoError(t, DB.Model(&User{}).Where("id = ?", userID).Update("status", common.UserStatusDisabled).Error)
-			case "expired":
-				require.NoError(t, DB.Model(code).Update("expired_time", common.GetTimestamp()-1).Error)
 			case "wrong-channel":
 				require.NoError(t, DB.Model(code).Update("service_channel_id", 25).Error)
 			case "wrong-model":
@@ -434,6 +492,23 @@ func TestSubscriptionRedemptionRejectsInvalidStateAtomically(t *testing.T) {
 			assert.Zero(t, count)
 		})
 	}
+}
+
+func TestCreateSubscriptionRedemptionsAllowsV1DailyLimitsWithoutTotalAmount(t *testing.T) {
+	_, _, plan := setupSubscriptionRedemptionFixture(t)
+	require.NoError(t, DB.Model(plan).Update("total_amount", 0).Error)
+	t.Cleanup(func() {
+		require.NoError(t, DB.Where("subscription_plan_id = ?", plan.Id).Delete(&Redemption{}).Error)
+	})
+
+	keys, err := CreateSubscriptionRedemptions("day", plan.Id, 1, "zero-total", 0)
+	require.NoError(t, err)
+	require.Len(t, keys, 1)
+
+	var code Redemption
+	require.NoError(t, DB.Where("key = ?", keys[0]).First(&code).Error)
+	assert.Equal(t, RedemptionTypeSubscription, code.Type)
+	assert.Equal(t, plan.Id, code.SubscriptionPlanID)
 }
 
 func TestSubscriptionRedemptionConcurrentSingleSuccess(t *testing.T) {
@@ -482,6 +557,24 @@ func TestSubscriptionRedemptionPurchaseLimitRollsBackCode(t *testing.T) {
 	var count int64
 	require.NoError(t, DB.Model(&UserSubscription{}).Where("plan_id = ?", plan.Id).Count(&count).Error)
 	assert.EqualValues(t, 1, count)
+}
+
+func TestSubscriptionRedemptionAllowsMultipleCardsWhenPlanIsUnlimited(t *testing.T) {
+	userID, first, plan := setupSubscriptionRedemptionFixture(t)
+	second, err := NewSubscriptionRedemption("day", plan.Id, 24, "deepseek-v4.1-flash", "second", 0)
+	require.NoError(t, err)
+	require.NoError(t, second.Insert())
+
+	_, err = RedeemSubscription(first.Key, userID)
+	require.NoError(t, err)
+	_, err = RedeemSubscription(second.Key, userID)
+	require.NoError(t, err)
+
+	var count int64
+	require.NoError(t, DB.Model(&UserSubscription{}).
+		Where("user_id = ? AND plan_id = ?", userID, plan.Id).
+		Count(&count).Error)
+	assert.EqualValues(t, 2, count)
 }
 
 func TestSearchRedemptionsFiltersAndPaginates(t *testing.T) {

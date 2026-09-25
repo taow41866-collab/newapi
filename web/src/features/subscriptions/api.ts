@@ -30,6 +30,7 @@ import type {
   SubscriptionPayResponse,
   SubscriptionPayRequest,
   SelfSubscriptionData,
+  UserSubscription,
 } from './types'
 
 // ============================================================================
@@ -71,7 +72,6 @@ export async function createSubscriptionRedemptions(data: {
   count: number
   plan_id: number
   kind: 'day' | 'week' | 'month'
-  expired_time: number
 }): Promise<ApiResponse<string[]>> {
   const res = await api.post('/api/redemption/subscription', data)
   return res.data
@@ -227,6 +227,13 @@ export async function getSelfSubscriptionFull(): Promise<
   ApiResponse<SelfSubscriptionData>
 > {
   const res = await api.get('/api/subscription/self')
+  return res.data
+}
+
+export async function redeemSubscriptionCode(
+  key: string
+): Promise<ApiResponse<UserSubscription>> {
+  const res = await api.post('/api/subscription/redeem', { key })
   return res.data
 }
 

@@ -6559,7 +6559,12 @@
       }
     }
   },
-  "servers": [],
+  "servers": [
+    {
+      "url": "https://lpss.online",
+      "description": "Production API"
+    }
+  ],
   "security": [
     {
       "BearerAuth": []

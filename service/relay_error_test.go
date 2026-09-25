@@ -164,6 +164,33 @@ func TestDecideRelayRetryReasons(t *testing.T) {
 	}
 }
 
+func TestDecideRelayRetryClearsPreferredChannelBeforeFallback(t *testing.T) {
+	cacheKeySuffix := fmt.Sprintf("prefer-fallback:%d", time.Now().UnixNano())
+	cacheKeyFull := channelAffinityCacheNamespace + ":" + cacheKeySuffix
+	cache := getChannelAffinityCache()
+	require.NoError(t, cache.SetWithTTL(cacheKeySuffix, 101, time.Minute))
+	t.Cleanup(func() {
+		_, _ = cache.DeleteMany([]string{cacheKeySuffix})
+	})
+
+	ctx := buildChannelAffinityTemplateContextForTest(channelAffinityMeta{
+		CacheKey:   cacheKeyFull,
+		TTLSeconds: 60,
+		RuleName:   "prefer-fallback",
+		SkipRetry:  false,
+		UsingGroup: "default",
+		ModelName:  "gpt-5",
+	})
+	MarkChannelAffinityUsed(ctx, "default", 101)
+	apiErr := types.NewOpenAIError(errors.New("temporary upstream failure"), types.ErrorCodeBadResponseStatusCode, http.StatusTooManyRequests)
+
+	decision := DecideRelayRetry(ctx, apiErr, 1)
+	require.Equal(t, PolicyDecision{Action: "retry", Reason: "retry_status_matched", Source: "global"}, decision)
+	_, found, err := cache.Get(cacheKeySuffix)
+	require.NoError(t, err)
+	assert.False(t, found, "a retryable preferred-channel failure must clear affinity before fallback")
+}
+
 func TestRequestPolicyEventsReachLogAdminInfo(t *testing.T) {
 	previousAutoDisable := common.AutomaticDisableChannelEnabled
 	common.AutomaticDisableChannelEnabled = true

@@ -70,32 +70,25 @@ async function setup(
 }
 
 describe('administrator plan cards', () => {
-  it('orders daily, weekly and monthly sections vertically regardless of API order', async () => {
+  it('shows the researched card layout one period at a time', async () => {
     await setup()
     expect(
       screen.getAllByRole('heading', { level: 2 }).map((el) => el.textContent)
-    ).toEqual(['Day pass', 'Week pass', 'Month pass'])
-    expect(
-      screen.getByRole('region', { name: 'Subscription plans' })
-    ).toHaveClass('flex', 'flex-col', 'gap-5')
-    expect(
-      screen.getByRole('region', { name: 'Subscription plans' })
-    ).not.toHaveClass('auto-rows-fr', 'min-h-full')
+    ).toEqual(['Day pass'])
+    expect(screen.getByRole('region', { name: 'Subscription plans' })).toHaveClass(
+      'min-w-0'
+    )
     expect(screen.getByRole('article', { name: 'Plan 1' })).toHaveClass(
-      'rounded-md',
+      'rounded-lg',
       'border'
     )
-    expect(
-      screen.getByRole('article', { name: 'Plan 1' }).parentElement
-    ).not.toHaveClass('xl:grid-cols-2')
-    expect(
-      screen.getByRole('region', { name: 'Subscription plans' }).parentElement
-    ).toHaveClass('overflow-y-auto')
+    expect(screen.getByText('Plan 1')).toBeVisible()
   })
   it('keeps missing periods visible with a working create action', async () => {
     const { user, onCreate } = await setup([])
+    await user.click(screen.getByRole('tab', { name: 'Week pass' }))
     await user.click(
-      within(screen.getByRole('region', { name: 'Week pass' })).getByRole(
+      within(screen.getByRole('region', { name: 'Subscription plans' })).getByRole(
         'button',
         { name: 'Create Plan' }
       )
@@ -111,7 +104,7 @@ describe('administrator plan cards', () => {
   it('offers a year filter when an annual plan exists and shows only that period', async () => {
     const { user } = await setup([plan(1, 'day', 1), plan(4, 'year', 1)])
     await user.selectOptions(
-      screen.getByRole('combobox', { name: 'Plan period' }),
+      screen.getByRole('combobox', { name: 'Additional periods' }),
       'year'
     )
     expect(
@@ -120,9 +113,18 @@ describe('administrator plan cards', () => {
     expect(screen.getByText('Plan 4')).toBeVisible()
     expect(screen.queryByText('Plan 1')).not.toBeInTheDocument()
   })
+  it('switches between daily, weekly and monthly cards', async () => {
+    const { user } = await setup()
+    await user.click(screen.getByRole('tab', { name: 'Week pass' }))
+    expect(screen.getAllByRole('heading', { level: 2 }).map((el) => el.textContent)).toEqual([
+      'Week pass',
+    ])
+    expect(screen.getByText('Plan 2')).toBeVisible()
+    expect(screen.queryByText('Plan 1')).not.toBeInTheDocument()
+  })
   it('does not invent daily token limits or convert the stored currency', async () => {
     await setup([plan(1, 'day', 1)])
-    expect(screen.getByText('CNY 4.90')).toBeVisible()
+    expect(screen.getByText('¥ 4.90')).toBeVisible()
     expect(screen.getByText('No Reset')).toBeVisible()
     expect(screen.getByText('Unlimited')).toBeVisible()
     expect(screen.queryByText('Daily input tokens')).not.toBeInTheDocument()
@@ -131,26 +133,21 @@ describe('administrator plan cards', () => {
     const misleading = plan(5, 'day', 14)
     misleading.plan.title = 'Day pass special'
     await setup([plan(1, 'day', 1), plan(2, 'day', 1), misleading])
-    expect(
-      within(screen.getByRole('region', { name: 'Day pass' })).getByText(
-        'Plan 2'
-      )
-    ).toBeVisible()
-    expect(
-      within(screen.getByRole('region', { name: 'Day pass' }))
-        .getByRole('article', { name: 'Plan 1' }).parentElement
-    ).toHaveClass('xl:grid-cols-2')
-    expect(
-      within(screen.getByRole('region', { name: 'Other periods' })).getByText(
-        'Day pass special'
-      )
-    ).toBeVisible()
+    expect(screen.getByText('Plan 2')).toBeVisible()
+    expect(screen.getByRole('article', { name: 'Plan 1' }).parentElement).toHaveClass(
+      'lg:grid-cols-3'
+    )
+    await userEvent.setup().selectOptions(
+      screen.getByRole('combobox', { name: 'Additional periods' }),
+      'other'
+    )
+    expect(screen.getByText('Day pass special')).toBeVisible()
   })
   it('uses three columns when a period has three price tiers', async () => {
     await setup([plan(1, 'day', 1), plan(2, 'day', 1), plan(3, 'day', 1)])
     expect(
       screen.getByRole('article', { name: 'Plan 1' }).parentElement
-    ).toHaveClass('xl:grid-cols-3')
+    ).toHaveClass('lg:grid-cols-3')
   })
   it('shows independent input and output limits for a V1 plan instead of unlimited quota', async () => {
     const record = plan(1, 'day', 1)
@@ -164,7 +161,7 @@ describe('administrator plan cards', () => {
     await setup([record])
     expect(screen.getByText('50,000')).toBeVisible()
     expect(screen.getByText('10,000')).toBeVisible()
-    expect(screen.getByText('deepseek-v4.1-flash')).toBeVisible()
+    expect(screen.getAllByText('deepseek-v4.1-flash').length).toBeGreaterThan(0)
     expect(screen.queryByText('Unlimited')).not.toBeInTheDocument()
     expect(screen.queryByText('Channel')).not.toBeInTheDocument()
     expect(screen.queryByText('#24')).not.toBeInTheDocument()

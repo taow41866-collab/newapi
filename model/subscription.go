@@ -292,6 +292,9 @@ type UserSubscription struct {
 	Id     int `json:"id"`
 	UserId int `json:"user_id" gorm:"index;index:idx_user_sub_active,priority:1"`
 	PlanId int `json:"plan_id" gorm:"index"`
+	// Price and currency are snapshots so historical subscriptions keep their purchase price after plan edits.
+	PriceAmount float64 `json:"price_amount" gorm:"type:decimal(10,6);not null;default:0"`
+	Currency    string  `json:"currency" gorm:"type:varchar(8);not null;default:'USD'"`
 	// Entitlement snapshot for redeemed subscriptions, independent of template edits.
 	BillingPolicy         string `json:"billing_policy" gorm:"type:varchar(32);not null;default:''"`
 	ServiceChannelID      int    `json:"service_channel_id" gorm:"not null;default:0"`
@@ -300,7 +303,7 @@ type UserSubscription struct {
 	DailyOutputTokenLimit int64  `json:"daily_output_token_limit" gorm:"type:bigint;not null;default:0"`
 	DailyInputTokensUsed  int64  `json:"daily_input_tokens_used" gorm:"type:bigint;not null;default:0"`
 	DailyOutputTokensUsed int64  `json:"daily_output_tokens_used" gorm:"type:bigint;not null;default:0"`
-	UsageEpoch           int64  `json:"usage_epoch" gorm:"type:bigint;not null;default:0"`
+	UsageEpoch            int64  `json:"usage_epoch" gorm:"type:bigint;not null;default:0"`
 
 	AmountTotal int64 `json:"amount_total" gorm:"type:bigint;not null;default:0"`
 	AmountUsed  int64 `json:"amount_used" gorm:"type:bigint;not null;default:0"`
@@ -340,7 +343,15 @@ func (s *UserSubscription) BeforeUpdate(tx *gorm.DB) error {
 }
 
 type SubscriptionSummary struct {
-	Subscription *UserSubscription `json:"subscription"`
+	Subscription *UserSubscription        `json:"subscription"`
+	PlanDisplay  *SubscriptionPlanDisplay `json:"plan_display,omitempty"`
+}
+
+type SubscriptionPlanDisplay struct {
+	Title         string `json:"title"`
+	Subtitle      string `json:"subtitle"`
+	DurationUnit  string `json:"duration_unit"`
+	DurationValue int    `json:"duration_value"`
 }
 
 type SubscriptionResetResult struct {
@@ -592,22 +603,24 @@ func CreateUserSubscriptionFromPlanTx(tx *gorm.DB, userId int, plan *Subscriptio
 		ServiceModel:          plan.ServiceModel,
 		DailyInputTokenLimit:  plan.DailyInputTokenLimit,
 		DailyOutputTokenLimit: plan.DailyOutputTokenLimit,
-		UserId:              userId,
-		PlanId:              plan.Id,
-		AmountTotal:         plan.TotalAmount,
-		AmountUsed:          0,
-		StartTime:           now.Unix(),
-		EndTime:             endUnix,
-		Status:              "active",
-		Source:              source,
-		LastResetTime:       lastReset,
-		NextResetTime:       nextReset,
-		UpgradeGroup:        upgradeGroup,
-		PrevUserGroup:       prevGroup,
-		DowngradeGroup:      strings.TrimSpace(plan.DowngradeGroup),
-		AllowWalletOverflow: allowWalletOverflow,
-		CreatedAt:           common.GetTimestamp(),
-		UpdatedAt:           common.GetTimestamp(),
+		UserId:                userId,
+		PlanId:                plan.Id,
+		PriceAmount:           plan.PriceAmount,
+		Currency:              plan.Currency,
+		AmountTotal:           plan.TotalAmount,
+		AmountUsed:            0,
+		StartTime:             now.Unix(),
+		EndTime:               endUnix,
+		Status:                "active",
+		Source:                source,
+		LastResetTime:         lastReset,
+		NextResetTime:         nextReset,
+		UpgradeGroup:          upgradeGroup,
+		PrevUserGroup:         prevGroup,
+		DowngradeGroup:        strings.TrimSpace(plan.DowngradeGroup),
+		AllowWalletOverflow:   allowWalletOverflow,
+		CreatedAt:             common.GetTimestamp(),
+		UpdatedAt:             common.GetTimestamp(),
 	}
 	if err := tx.Create(sub).Error; err != nil {
 		return nil, err
@@ -918,7 +931,8 @@ func GetAllActiveUserSubscriptions(userId int) ([]SubscriptionSummary, error) {
 	if err != nil {
 		return nil, err
 	}
-	return buildSubscriptionSummaries(subs), nil
+	plans := enrichSubscriptionPriceSnapshots(subs)
+	return buildSubscriptionSummaries(subs, plans), nil
 }
 
 // HasActiveUserSubscription returns whether the user has any active subscription.
@@ -1014,19 +1028,60 @@ func GetAllUserSubscriptions(userId int) ([]SubscriptionSummary, error) {
 	if err != nil {
 		return nil, err
 	}
-	return buildSubscriptionSummaries(subs), nil
+	plans := enrichSubscriptionPriceSnapshots(subs)
+	return buildSubscriptionSummaries(subs, plans), nil
 }
 
-func buildSubscriptionSummaries(subs []UserSubscription) []SubscriptionSummary {
+// enrichSubscriptionPriceSnapshots backfills display data for subscriptions
+// created before price snapshots were added, without changing billing history.
+func enrichSubscriptionPriceSnapshots(subs []UserSubscription) map[int]SubscriptionPlan {
+	planIDs := make([]int, 0, len(subs))
+	seen := make(map[int]struct{}, len(subs))
+	for _, sub := range subs {
+		if sub.PlanId > 0 {
+			if _, ok := seen[sub.PlanId]; !ok {
+				seen[sub.PlanId] = struct{}{}
+				planIDs = append(planIDs, sub.PlanId)
+			}
+		}
+	}
+	if len(planIDs) == 0 {
+		return nil
+	}
+	var plans []SubscriptionPlan
+	if err := DB.Where("id IN ?", planIDs).Find(&plans).Error; err != nil {
+		return nil
+	}
+	byID := make(map[int]SubscriptionPlan, len(plans))
+	for _, plan := range plans {
+		byID[plan.Id] = plan
+	}
+	for i := range subs {
+		if plan, ok := byID[subs[i].PlanId]; ok && subs[i].PriceAmount == 0 {
+			subs[i].PriceAmount = plan.PriceAmount
+			subs[i].Currency = plan.Currency
+		}
+	}
+	return byID
+}
+
+func buildSubscriptionSummaries(subs []UserSubscription, plans map[int]SubscriptionPlan) []SubscriptionSummary {
 	if len(subs) == 0 {
 		return []SubscriptionSummary{}
 	}
 	result := make([]SubscriptionSummary, 0, len(subs))
 	for _, sub := range subs {
 		subCopy := sub
-		result = append(result, SubscriptionSummary{
+		summary := SubscriptionSummary{
 			Subscription: &subCopy,
-		})
+		}
+		if plan, ok := plans[sub.PlanId]; ok {
+			summary.PlanDisplay = &SubscriptionPlanDisplay{
+				Title: plan.Title, Subtitle: plan.Subtitle,
+				DurationUnit: plan.DurationUnit, DurationValue: plan.DurationValue,
+			}
+		}
+		result = append(result, summary)
 	}
 	return result
 }

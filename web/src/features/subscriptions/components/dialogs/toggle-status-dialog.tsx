@@ -16,8 +16,9 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useState } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
+import { useState } from 'react'
 import { toast } from 'sonner'
 
 import { ConfirmDialog } from '@/components/confirm-dialog'
@@ -29,6 +30,7 @@ import { useSubscriptions } from '../subscriptions-provider'
 export function ToggleStatusDialog() {
   const { t } = useTranslation()
   const { open, setOpen, currentRow, triggerRefresh } = useSubscriptions()
+  const queryClient = useQueryClient()
   const [loading, setLoading] = useState(false)
 
   if (open !== 'toggle-status' || !currentRow) return null
@@ -50,6 +52,9 @@ export function ToggleStatusDialog() {
           isEnabled ? t('Has been disabled') : t('Has been enabled')
         )
         triggerRefresh()
+        await queryClient.invalidateQueries({
+          queryKey: ['admin-subscription-card-plans'],
+        })
         setOpen(null)
       } else {
         handleServerError(res)

@@ -127,3 +127,55 @@ func TestCacheGetRandomSatisfiedChannelUsesTokenAutoGroupsWhenGlobalAutoIsEmpty(
 	assert.Equal(t, "default", selectedGroup)
 	assert.Equal(t, "default", common.GetContextKeyString(ctx, constant.ContextKeyAutoGroup))
 }
+
+func TestCacheGetRandomSatisfiedChannelFallsBackToNextPriority(t *testing.T) {
+	db := setupChannelSelectAutoGroupsTest(t)
+	const modelName = "priority-fallback-model"
+	for _, fixture := range []struct {
+		id       int
+		priority int64
+	}{
+		{id: 2111, priority: 10},
+		{id: 2112, priority: 5},
+	} {
+		weight := uint(100)
+		require.NoError(t, db.Create(&model.Channel{
+			Id:       fixture.id,
+			Type:     constant.ChannelTypeOpenAI,
+			Key:      fmt.Sprintf("priority-key-%d", fixture.id),
+			Status:   common.ChannelStatusEnabled,
+			Name:     fmt.Sprintf("priority-channel-%d", fixture.id),
+			Weight:   &weight,
+			Priority: &fixture.priority,
+			Models:   modelName,
+			Group:    "default",
+		}).Error)
+		require.NoError(t, db.Create(&model.Ability{
+			Group:     "default",
+			Model:     modelName,
+			ChannelId: fixture.id,
+			Enabled:   true,
+			Priority:  &fixture.priority,
+			Weight:    weight,
+		}).Error)
+	}
+	model.InitChannelCache()
+
+	gin.SetMode(gin.TestMode)
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	firstRetry := 0
+	param := &RetryParam{Ctx: ctx, TokenGroup: "default", ModelName: modelName, Retry: &firstRetry}
+
+	primary, group, err := CacheGetRandomSatisfiedChannel(param)
+	require.NoError(t, err)
+	require.NotNil(t, primary)
+	assert.Equal(t, 2111, primary.Id)
+	assert.Equal(t, "default", group)
+
+	param.IncreaseRetry()
+	backup, group, err := CacheGetRandomSatisfiedChannel(param)
+	require.NoError(t, err)
+	require.NotNil(t, backup)
+	assert.Equal(t, 2112, backup.Id)
+	assert.Equal(t, "default", group)
+}

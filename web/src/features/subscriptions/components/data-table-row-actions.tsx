@@ -101,7 +101,6 @@ export function SubscriptionPlanActions({ record }: { record: PlanRecord }) {
             <Button
               variant='ghost'
               size='icon-sm'
-              disabled={!complianceConfirmed}
               onClick={handleToggleStatus}
               aria-label={toggleLabel}
               className={

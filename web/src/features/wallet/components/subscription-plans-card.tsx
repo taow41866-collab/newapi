@@ -16,19 +16,17 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { Crown, RefreshCw, Sparkles, Check } from 'lucide-react'
+import { Crown, RefreshCw, Check, ExternalLink } from 'lucide-react'
 import { useState, useEffect, useMemo, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
 import {
-  StatusBadge,
   dotColorMap,
   textColorMap,
 } from '@/components/status-badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader } from '@/components/ui/card'
-import { Progress } from '@/components/ui/progress'
 import {
   Select,
   SelectContent,
@@ -51,6 +49,7 @@ import {
   updateBillingPreference,
 } from '@/features/subscriptions/api'
 import { SubscriptionPurchaseDialog } from '@/features/subscriptions/components/dialogs/subscription-purchase-dialog'
+import { SubscriptionSummaryCards } from '@/features/subscriptions/components/subscription-summary-cards'
 import { formatDuration, formatResetPeriod } from '@/features/subscriptions/lib'
 import type {
   PlanRecord,
@@ -68,6 +67,8 @@ interface SubscriptionPlansCardProps {
   onAvailabilityChange?: (available: boolean) => void
   userQuota?: number
   onPurchaseSuccess?: () => void | Promise<void>
+  refreshKey?: number
+  showAvailablePlans?: boolean
 }
 
 function getEpayMethods(payMethods: PaymentMethod[] = []): PaymentMethod[] {
@@ -99,6 +100,8 @@ export function SubscriptionPlansCard({
   onAvailabilityChange,
   userQuota,
   onPurchaseSuccess,
+  refreshKey,
+  showAvailablePlans = true,
 }: SubscriptionPlansCardProps) {
   const { t } = useTranslation()
 
@@ -160,7 +163,7 @@ export function SubscriptionPlansCard({
       setLoading(false)
     }
     init()
-  }, [fetchPlans, fetchSelfSubscription])
+  }, [fetchPlans, fetchSelfSubscription, refreshKey])
 
   const handleRefresh = async () => {
     setRefreshing(true)
@@ -211,30 +214,6 @@ export function SubscriptionPlansCard({
   useEffect(() => {
     onAvailabilityChange?.(isAvailable)
   }, [isAvailable, onAvailabilityChange])
-
-  const planTitleMap = useMemo(() => {
-    const map = new Map<number, string>()
-    for (const p of plans) {
-      if (p?.plan?.id) {
-        map.set(p.plan.id, p.plan.title || '')
-      }
-    }
-    return map
-  }, [plans])
-
-  const getRemainingDays = (sub: UserSubscriptionRecord) => {
-    const endTime = sub?.subscription?.end_time || 0
-    if (!endTime) return 0
-    const now = Date.now() / 1000
-    return Math.max(0, Math.ceil((endTime - now) / 86400))
-  }
-
-  const getUsagePercent = (sub: UserSubscriptionRecord) => {
-    const total = Number(sub?.subscription?.amount_total || 0)
-    const used = Number(sub?.subscription?.amount_used || 0)
-    if (total <= 0) return 0
-    return Math.round((used / total) * 100)
-  }
 
   if (loading) {
     return (
@@ -397,123 +376,35 @@ export function SubscriptionPlansCard({
           {hasAny && (
             <>
               <Separator className='my-3' />
-              <div className='max-h-64 space-y-3 overflow-y-auto pr-1'>
-                {allSubscriptions.map((sub) => {
-                  const subscription = sub.subscription
-                  const totalAmount = Number(subscription?.amount_total || 0)
-                  const usedAmount = Number(subscription?.amount_used || 0)
-                  const remainAmount =
-                    totalAmount > 0 ? Math.max(0, totalAmount - usedAmount) : 0
-                  const planTitle =
-                    planTitleMap.get(subscription?.plan_id) || ''
-                  const remainDays = getRemainingDays(sub)
-                  const usagePercent = getUsagePercent(sub)
-                  const now = Date.now() / 1000
-                  const isExpired = (subscription?.end_time || 0) < now
-                  const isCancelled = subscription?.status === 'cancelled'
-                  const isActive =
-                    subscription?.status === 'active' && !isExpired
-                  const nextResetTime = subscription?.next_reset_time ?? 0
-                  let statusBadge = (
-                    <StatusBadge
-                      label={t('Expired')}
-                      variant='neutral'
-                      copyable={false}
-                    />
-                  )
-                  if (isActive) {
-                    statusBadge = (
-                      <StatusBadge
-                        label={t('Active')}
-                        variant='success'
-                        copyable={false}
-                      />
-                    )
-                  } else if (isCancelled) {
-                    statusBadge = (
-                      <StatusBadge
-                        label={t('Cancelled')}
-                        variant='neutral'
-                        copyable={false}
-                      />
-                    )
-                  }
-
-                  let endTimeLabel = t('Expired at')
-                  if (isActive) {
-                    endTimeLabel = t('Until')
-                  } else if (isCancelled) {
-                    endTimeLabel = t('Cancelled at')
-                  }
-
-                  return (
-                    <div
-                      key={subscription?.id}
-                      className='bg-background rounded-md border p-3 text-xs'
-                    >
-                      <div className='flex items-center justify-between'>
-                        <div className='flex items-center gap-2'>
-                          <span className='font-medium'>
-                            {planTitle
-                              ? `${planTitle} · ${t('Subscription')} #${subscription?.id}`
-                              : `${t('Subscription')} #${subscription?.id}`}
-                          </span>
-                          {statusBadge}
-                        </div>
-                        {isActive && (
-                          <span className='text-muted-foreground'>
-                            {t('{{count}} days remaining', {
-                              count: remainDays,
-                            })}
-                          </span>
-                        )}
-                      </div>
-                      <div className='text-muted-foreground mt-1.5'>
-                        {endTimeLabel}{' '}
-                        {new Date(
-                          (subscription?.end_time || 0) * 1000
-                        ).toLocaleString()}
-                      </div>
-                      {isActive && nextResetTime > 0 && (
-                        <div className='text-muted-foreground mt-1'>
-                          {t('Next reset')}:{' '}
-                          {new Date(nextResetTime * 1000).toLocaleString()}
-                        </div>
-                      )}
-                      <div className='text-muted-foreground mt-1'>
-                        {t('Total Quota')}:{' '}
-                        {totalAmount > 0 ? (
-                          <Tooltip>
-                            <TooltipTrigger
-                              render={<span className='cursor-help' />}
-                            >
-                              {formatQuota(usedAmount)}/
-                              {formatQuota(totalAmount)} · {t('Remaining')}{' '}
-                              {formatQuota(remainAmount)}
-                            </TooltipTrigger>
-                            <TooltipContent>
-                              {t('Raw Quota')}: {usedAmount}/{totalAmount} ·{' '}
-                              {t('Remaining')} {remainAmount}
-                            </TooltipContent>
-                          </Tooltip>
-                        ) : (
-                          t('Unlimited')
-                        )}
-                        {totalAmount > 0 && (
-                          <span className='ml-2'>
-                            {t('Used')} {usagePercent}%
-                          </span>
-                        )}
-                      </div>
-                      {totalAmount > 0 && isActive && (
-                        <Progress value={usagePercent} className='mt-2 h-1.5' />
-                      )}
-                    </div>
-                  )
-                })}
-              </div>
+              <SubscriptionSummaryCards
+                plans={plans}
+                subscriptions={allSubscriptions}
+              />
             </>
           )}
+
+          {showAvailablePlans && <div className='mt-4 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-dashed p-3'>
+            <div>
+              <p className='text-sm font-medium'>{t('Need a subscription card?')}</p>
+              <p className='text-muted-foreground text-xs'>
+                {t('Purchase a card from the store, then redeem it here.')}
+              </p>
+            </div>
+            <Button
+              variant='outline'
+              size='sm'
+              onClick={() =>
+                window.open(
+                  'https://catfk.com/merchant/goods/list?is_proxy=0',
+                  '_blank',
+                  'noopener,noreferrer'
+                )
+              }
+            >
+              <ExternalLink className='mr-2 h-4 w-4' />
+              {t('Buy subscription card')}
+            </Button>
+          </div>}
 
           {!hasAny && (
             <p className='text-muted-foreground mt-2 text-xs'>
@@ -523,14 +414,13 @@ export function SubscriptionPlansCard({
         </div>
 
         {/* Available plans grid */}
-        {plans.length > 0 ? (
+        {showAvailablePlans && plans.length > 0 ? (
           <div className='grid grid-cols-1 gap-3 2xl:grid-cols-2 2xl:gap-4'>
-            {plans.map((p, index) => {
+            {plans.map((p) => {
               const plan = p?.plan
               if (!plan) return null
               const totalAmount = Number(plan.total_amount || 0)
               const price = Number(plan.price_amount || 0).toFixed(2)
-              const isPopular = index === 0 && plans.length > 1
               const limit = Number(plan.max_purchase_per_user || 0)
               const count = planPurchaseCountMap.get(plan.id) || 0
               const reached = limit > 0 && count >= limit
@@ -553,7 +443,7 @@ export function SubscriptionPlansCard({
                 <Card
                   key={plan.id}
                   data-card-hover='false'
-                  className={cn(isPopular && 'border-primary/70 shadow-sm')}
+                  className={cn('shadow-sm')}
                 >
                   <CardContent className='flex h-full flex-col p-3.5 sm:p-4'>
                     <div className='mb-2 flex items-start justify-between gap-3'>
@@ -567,16 +457,6 @@ export function SubscriptionPlansCard({
                           </p>
                         )}
                       </div>
-                      {isPopular && (
-                        <StatusBadge
-                          variant='info'
-                          copyable={false}
-                          className='shrink-0'
-                        >
-                          <Sparkles className='h-3 w-3' />
-                          {t('Recommended')}
-                        </StatusBadge>
-                      )}
                     </div>
 
                     <div className='py-2'>

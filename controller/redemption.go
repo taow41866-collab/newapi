@@ -135,11 +135,10 @@ func AddRedemption(c *gin.Context) {
 }
 
 type AddSubscriptionRedemptionRequest struct {
-	Name      string `json:"name" binding:"required"`
-	Count     int    `json:"count" binding:"required,min=1,max=100"`
-	PlanID    int    `json:"plan_id" binding:"required,gt=0"`
-	Kind      string `json:"kind" binding:"required"`
-	ExpiredTime int64 `json:"expired_time"`
+	Name   string `json:"name" binding:"required"`
+	Count  int    `json:"count" binding:"required,min=1,max=100"`
+	PlanID int    `json:"plan_id" binding:"required,gt=0"`
+	Kind   string `json:"kind" binding:"required"`
 }
 
 // AddSubscriptionRedemption creates cards bound to one validated V1 plan.
@@ -150,15 +149,11 @@ func AddSubscriptionRedemption(c *gin.Context) {
 		common.ApiErrorMsg(c, "订阅卡参数无效")
 		return
 	}
-	if valid, msg := validateExpiredTime(c, req.ExpiredTime); !valid {
-		c.JSON(http.StatusOK, gin.H{"success": false, "message": msg})
-		return
-	}
 	if utf8.RuneCountInString(req.Name) == 0 || utf8.RuneCountInString(req.Name) > 20 {
 		common.ApiErrorMsg(c, "订阅卡名称长度无效")
 		return
 	}
-	keys, err := model.CreateSubscriptionRedemptions(req.Kind, req.PlanID, req.Count, req.Name, req.ExpiredTime)
+	keys, err := model.CreateSubscriptionRedemptions(req.Kind, req.PlanID, req.Count, req.Name, 0)
 	if err != nil {
 		common.ApiErrorMsg(c, "订阅卡生成失败，未创建任何卡密")
 		return

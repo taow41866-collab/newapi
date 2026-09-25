@@ -57,13 +57,15 @@ func GenerateSubscriptionRedemptionKey(kind string) (string, error) {
 }
 
 // NewSubscriptionRedemption creates an unredeemed code bound to one plan/service.
+// Subscription cards do not have a separate pre-redemption expiry; their
+// duration starts when RedeemSubscription creates the user entitlement.
 // Caller persists it with Insert; the unique key index protects against collisions.
 func NewSubscriptionRedemption(kind string, planID, channelID int, model string, name string, expires int64) (*Redemption, error) {
 	key, err := GenerateSubscriptionRedemptionKey(kind)
 	if err != nil || planID <= 0 || channelID != SubscriptionV1ChannelID || model != SubscriptionV1Model || expires < 0 {
 		return nil, errors.New("invalid subscription redemption binding")
 	}
-	return &Redemption{Key: key, Name: name, Type: RedemptionTypeSubscription, SubscriptionKind: kind, SubscriptionPlanID: planID, ServiceChannelID: SubscriptionV1ChannelID, ServiceModel: SubscriptionV1Model, Status: common.RedemptionCodeStatusEnabled, CreatedTime: common.GetTimestamp(), ExpiredTime: expires}, nil
+	return &Redemption{Key: key, Name: name, Type: RedemptionTypeSubscription, SubscriptionKind: kind, SubscriptionPlanID: planID, ServiceChannelID: SubscriptionV1ChannelID, ServiceModel: SubscriptionV1Model, Status: common.RedemptionCodeStatusEnabled, CreatedTime: common.GetTimestamp(), ExpiredTime: 0}, nil
 }
 
 func insertSubscriptionRedemptionsTx(tx *gorm.DB, plan *SubscriptionPlan, cards []*Redemption) error {
@@ -140,7 +142,7 @@ func validateSubscriptionRedemptionPlan(code *Redemption, plan *SubscriptionPlan
 	if code.ServiceChannelID != SubscriptionV1ChannelID || code.ServiceModel != SubscriptionV1Model ||
 		!plan.Enabled || plan.DurationUnit != SubscriptionDurationDay || plan.DurationValue != days ||
 		plan.QuotaResetPeriod != SubscriptionResetDaily ||
-		plan.TotalAmount <= 0 || plan.AllowWalletOverflow == nil || *plan.AllowWalletOverflow ||
+		plan.AllowWalletOverflow == nil || *plan.AllowWalletOverflow ||
 		plan.UpgradeGroup != "" || plan.DowngradeGroup != "" {
 		return ErrRedeemFailed
 	}
@@ -207,14 +209,16 @@ func SearchRedemptions(keyword string, status string, startIdx int, num int) (re
 		switch status {
 		case "expired":
 			query = query.Where(
-				"status = ? AND expired_time != 0 AND expired_time < ?",
+				"status = ? AND type != ? AND expired_time != 0 AND expired_time < ?",
 				common.RedemptionCodeStatusEnabled,
+				RedemptionTypeSubscription,
 				now,
 			)
 		case strconv.Itoa(common.RedemptionCodeStatusEnabled):
 			query = query.Where(
-				"status = ? AND (expired_time = 0 OR expired_time >= ?)",
+				"status = ? AND (type = ? OR expired_time = 0 OR expired_time >= ?)",
 				common.RedemptionCodeStatusEnabled,
+				RedemptionTypeSubscription,
 				now,
 			)
 		case strconv.Itoa(common.RedemptionCodeStatusDisabled):
@@ -313,6 +317,12 @@ func RedeemSubscription(key string, userId int) (*UserSubscription, error) {
 	if key == "" || userId <= 0 {
 		return nil, ErrRedeemFailed
 	}
+	// Tests and lightweight embedded DB users can install model.DB directly
+	// without going through InitDB. Keep the quoted key column available for
+	// the redemption transaction in that case as well.
+	if commonKeyCol == "" {
+		initCol()
+	}
 	var sub *UserSubscription
 	err := DB.Transaction(func(tx *gorm.DB) error {
 		// Serialize different codes for one user as well, protecting plan purchase caps.
@@ -324,7 +334,7 @@ func RedeemSubscription(key string, userId int) (*UserSubscription, error) {
 		if err := lockForUpdate(tx).Where(commonKeyCol+" = ?", key).First(&code).Error; err != nil {
 			return err
 		}
-		if code.Type != RedemptionTypeSubscription || code.Status != common.RedemptionCodeStatusEnabled || (code.ExpiredTime != 0 && code.ExpiredTime <= common.GetTimestamp()) {
+		if code.Type != RedemptionTypeSubscription || code.Status != common.RedemptionCodeStatusEnabled {
 			return ErrRedeemFailed
 		}
 		if code.SubscriptionPlanID <= 0 {
@@ -364,6 +374,9 @@ func (redemption *Redemption) Insert() error {
 		if redemption.SubscriptionPlanID <= 0 || redemption.ExpiredTime < 0 {
 			return ErrRedeemFailed
 		}
+		// Subscription duration starts at redemption, so no new subscription
+		// row may carry an independent pre-redemption expiry.
+		redemption.ExpiredTime = 0
 		var plan SubscriptionPlan
 		if err := DB.First(&plan, redemption.SubscriptionPlanID).Error; err != nil {
 			return err
@@ -425,7 +438,7 @@ func DeleteRedemptionById(id int) (err error) {
 
 func DeleteInvalidRedemptions() (int64, error) {
 	now := common.GetTimestamp()
-	result := DB.Where("status IN ? OR (status = ? AND expired_time != 0 AND expired_time < ?)", []int{common.RedemptionCodeStatusUsed, common.RedemptionCodeStatusDisabled}, common.RedemptionCodeStatusEnabled, now).Delete(&Redemption{})
+	result := DB.Where("status IN ? OR (status = ? AND type != ? AND expired_time != 0 AND expired_time < ?)", []int{common.RedemptionCodeStatusUsed, common.RedemptionCodeStatusDisabled}, common.RedemptionCodeStatusEnabled, RedemptionTypeSubscription, now).Delete(&Redemption{})
 	return result.RowsAffected, result.Error
 }
 
