@@ -2,6 +2,7 @@ package router
 
 import (
 	"bytes"
+	"embed"
 	"errors"
 	"fmt"
 	"net/http"
@@ -24,6 +25,9 @@ import (
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 )
+
+//go:embed web/dist/docs/index.html
+var embeddedDocsTestFS embed.FS
 
 func TestPluginDispatcherMissFallsThroughWithoutLeakingInnerResponse(t *testing.T) {
 	outer, registry := newPluginRouterTest(t, nil, nil)
@@ -902,6 +906,19 @@ func TestWebFallbackDoesNotCacheMissingAPIOrAssets(t *testing.T) {
 	assert.Equal(t, http.StatusOK, page.Code)
 	assert.Equal(t, "dashboard", page.Body.String())
 	assert.Equal(t, "no-cache", page.Header().Get("Cache-Control"))
+}
+
+func TestDocsEntrypointDoesNotRedirectLoop(t *testing.T) {
+	outer := gin.New()
+	SetWebRouter(outer, WebAssets{BuildFS: embeddedDocsTestFS, IndexPage: []byte("dashboard")}, func(c *gin.Context) { c.Next() })
+
+	response := performPluginRequest(outer, http.MethodGet, "/docs/")
+	assert.Equal(t, http.StatusOK, response.Code)
+	assert.Equal(t, "docs test", strings.TrimSpace(response.Body.String()))
+
+	response = performPluginRequest(outer, http.MethodGet, "/docs")
+	assert.Equal(t, http.StatusMovedPermanently, response.Code)
+	assert.Equal(t, "/docs/", response.Header().Get("Location"))
 }
 
 func TestSecurityRoutesDisableCachingBeforeAuthentication(t *testing.T) {

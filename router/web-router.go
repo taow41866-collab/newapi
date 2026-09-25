@@ -25,6 +25,10 @@ func SetWebRouter(router *gin.Engine, assets WebAssets, pluginDispatcher gin.Han
 	router.GET("/docs", func(c *gin.Context) {
 		c.Redirect(http.StatusMovedPermanently, "/docs/")
 	})
+	// Serve the documentation outside NoRoute. static.Serve applies its own
+	// directory canonicalization, which redirects /docs/ back to /docs and
+	// conflicts with the explicit entrypoint redirect above.
+	router.GET("/docs/*path", gin.WrapH(http.StripPrefix("/docs", http.FileServer(docsFS))))
 
 	router.NoRoute(
 		pluginDispatcher,
@@ -33,7 +37,6 @@ func SetWebRouter(router *gin.Engine, assets WebAssets, pluginDispatcher gin.Han
 		middleware.AccessTokenAudit(),
 		middleware.GlobalWebRateLimit(),
 		middleware.Cache(),
-		static.Serve("/docs", docsFS),
 		static.Serve("/", frontendFS),
 		func(c *gin.Context) {
 			if strings.HasPrefix(c.Request.RequestURI, "/v1") || strings.HasPrefix(c.Request.RequestURI, "/api") || strings.HasPrefix(c.Request.RequestURI, "/assets") {
