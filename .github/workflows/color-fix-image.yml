@@ -2,9 +2,6 @@ name: Build color-fix image
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - color-fix-staging
 
 permissions:
   contents: read
