@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -951,6 +952,29 @@ func HasActiveUserSubscription(userId int) (bool, error) {
 	return count > 0, nil
 }
 
+// HasActiveUserSubscriptionForModel reports whether the user has an active
+// subscription that can bill the requested model. Empty service_model is kept
+// compatible with legacy unified-quota plans; model-bound plans are exact.
+func HasActiveUserSubscriptionForModel(userId int, modelName string) (bool, error) {
+	if userId <= 0 {
+		return false, errors.New("invalid userId")
+	}
+	modelName = strings.TrimSpace(modelName)
+	now := common.GetTimestamp()
+	var count int64
+	query := DB.Model(&UserSubscription{}).
+		Where("user_id = ? AND status = ? AND start_time <= ? AND end_time > ?", userId, "active", now, now)
+	if modelName == "" {
+		query = query.Where("service_model = ''")
+	} else {
+		query = query.Where("service_model = ? OR service_model = ''", modelName)
+	}
+	if err := query.Count(&count).Error; err != nil {
+		return false, err
+	}
+	return count > 0, nil
+}
+
 // GetActiveSubscriptionV1Candidates returns current DS Flash V1 entitlements
 // in expiry order so requests consume the subscription that expires first.
 func GetActiveSubscriptionV1Candidates(userId int) ([]UserSubscription, error) {
@@ -1001,15 +1025,19 @@ func HasActiveSubscriptionV1(userId int) (bool, error) {
 // UserActiveSubscriptionsAllowWalletOverflow returns whether wallet balance may be used
 // after the user's subscription quota is exhausted. A single active subscription that
 // disallows wallet overflow (allow_wallet_overflow = false) blocks the fallback.
-func UserActiveSubscriptionsAllowWalletOverflow(userId int) (bool, error) {
+func UserActiveSubscriptionsAllowWalletOverflow(userId int, modelName ...string) (bool, error) {
 	if userId <= 0 {
 		return false, errors.New("invalid userId")
 	}
 	now := common.GetTimestamp()
 	var strictCount int64
-	if err := DB.Model(&UserSubscription{}).
-		Where("user_id = ? AND status = ? AND end_time > ? AND allow_wallet_overflow = ?",
-			userId, "active", now, false).
+	query := DB.Model(&UserSubscription{}).
+		Where("user_id = ? AND status = ? AND start_time <= ? AND end_time > ? AND allow_wallet_overflow = ?",
+			userId, "active", now, now, false)
+	if len(modelName) > 0 && strings.TrimSpace(modelName[0]) != "" {
+		query = query.Where("service_model = ? OR service_model = ''", strings.TrimSpace(modelName[0]))
+	}
+	if err := query.
 		Count(&strictCount).Error; err != nil {
 		return false, err
 	}
@@ -1495,6 +1523,7 @@ func PreConsumeUserSubscription(requestId string, userId int, modelName string, 
 	returnValue := &SubscriptionPreConsumeResult{}
 
 	err := DB.Transaction(func(tx *gorm.DB) error {
+		modelName = strings.TrimSpace(modelName)
 		var existing SubscriptionPreConsumeRecord
 		query := tx.Where("request_id = ?", requestId).Limit(1).Find(&existing)
 		if query.Error != nil {
@@ -1514,6 +1543,10 @@ func PreConsumeUserSubscription(requestId string, userId int, modelName string, 
 			if sub.BillingPolicy != "" || sub.UserId != userId {
 				return errors.New("subscription requires dedicated token billing")
 			}
+			if (modelName == "" && sub.ServiceModel != "") ||
+				(modelName != "" && sub.ServiceModel != "" && sub.ServiceModel != modelName) {
+				return errors.New("subscription request model mismatch")
+			}
 			returnValue.UserSubscriptionId = sub.Id
 			returnValue.PreConsumed = existing.PreConsumed
 			returnValue.AmountTotal = sub.AmountTotal
@@ -1524,7 +1557,7 @@ func PreConsumeUserSubscription(requestId string, userId int, modelName string, 
 
 		var subs []UserSubscription
 		if err := lockForUpdate(tx).
-			Where("user_id = ? AND status = ? AND end_time > ?", userId, "active", now).
+			Where("user_id = ? AND status = ? AND start_time <= ? AND end_time > ?", userId, "active", now, now).
 			Order("end_time asc, id asc").
 			Find(&subs).Error; err != nil {
 			return errors.New("no active subscription")
@@ -1532,6 +1565,32 @@ func PreConsumeUserSubscription(requestId string, userId int, modelName string, 
 		if len(subs) == 0 {
 			return errors.New("no active subscription")
 		}
+		filtered := subs[:0]
+		for _, candidate := range subs {
+			// Model-bound subscriptions are exact. Empty service_model is the
+			// explicitly supported legacy unified-quota format.
+			if modelName == "" {
+				if candidate.ServiceModel == "" {
+					filtered = append(filtered, candidate)
+				}
+				continue
+			}
+			if candidate.ServiceModel == "" || candidate.ServiceModel == modelName {
+				filtered = append(filtered, candidate)
+			}
+		}
+		subs = filtered
+		sort.SliceStable(subs, func(i, j int) bool {
+			iExact := modelName != "" && subs[i].ServiceModel == modelName
+			jExact := modelName != "" && subs[j].ServiceModel == modelName
+			if iExact != jExact {
+				return iExact
+			}
+			if subs[i].EndTime != subs[j].EndTime {
+				return subs[i].EndTime < subs[j].EndTime
+			}
+			return subs[i].Id < subs[j].Id
+		})
 		for _, candidate := range subs {
 			// Never consume V1 as an unlimited legacy quota subscription.
 			if candidate.BillingPolicy != "" {
@@ -1564,6 +1623,10 @@ func PreConsumeUserSubscription(requestId string, userId int, modelName string, 
 				if err2 := tx.Where("request_id = ?", requestId).First(&dup).Error; err2 == nil {
 					if dup.UserId != userId || dup.UserSubscriptionId != sub.Id {
 						return errors.New("subscription request binding mismatch")
+					}
+					if modelName == "" && sub.ServiceModel != "" ||
+						modelName != "" && sub.ServiceModel != "" && sub.ServiceModel != modelName {
+						return errors.New("subscription request model mismatch")
 					}
 					if dup.Status == "refunded" {
 						return errors.New("subscription pre-consume already refunded")

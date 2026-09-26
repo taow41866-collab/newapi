@@ -391,6 +391,46 @@ func TestLegacySubscriptionCreationKeepsUnifiedQuota(t *testing.T) {
 	assert.Equal(t, plan.TotalAmount, sub.AmountTotal)
 }
 
+func TestLegacyConsumptionRequiresMatchingServiceModel(t *testing.T) {
+	userID, _, plan := setupSubscriptionRedemptionFixture(t)
+	require.NoError(t, DB.AutoMigrate(&SubscriptionPreConsumeRecord{}))
+	now := common.GetTimestamp()
+	sub := &UserSubscription{
+		UserId: userID, PlanId: plan.Id, ServiceModel: "deepseek-v4.1-flash",
+		AmountTotal: 100, StartTime: now - 60, EndTime: now + 3600,
+		Status: "active", AllowWalletOverflow: false,
+	}
+	require.NoError(t, DB.Create(sub).Error)
+	t.Cleanup(func() {
+		require.NoError(t, DB.Where("user_subscription_id = ?", sub.Id).Delete(&SubscriptionPreConsumeRecord{}).Error)
+		require.NoError(t, DB.Delete(sub).Error)
+	})
+
+	available, err := HasActiveUserSubscriptionForModel(userID, "gpt-5.6-sol")
+	require.NoError(t, err)
+	assert.False(t, available)
+	allowWallet, err := UserActiveSubscriptionsAllowWalletOverflow(userID, "gpt-5.6-sol")
+	require.NoError(t, err)
+	assert.True(t, allowWallet)
+	_, err = PreConsumeUserSubscription("model-mismatch", userID, "gpt-5.6-sol", 0, 10)
+	assert.ErrorContains(t, err, "subscription quota insufficient")
+	var record SubscriptionPreConsumeRecord
+	assert.ErrorIs(t, DB.Where("request_id = ?", "model-mismatch").First(&record).Error, gorm.ErrRecordNotFound)
+	allowWallet, err = UserActiveSubscriptionsAllowWalletOverflow(userID, "deepseek-v4.1-flash")
+	require.NoError(t, err)
+	assert.False(t, allowWallet)
+	_, err = PreConsumeUserSubscription("model-empty", userID, "", 0, 10)
+	assert.ErrorContains(t, err, "subscription quota insufficient")
+
+	available, err = HasActiveUserSubscriptionForModel(userID, "deepseek-v4.1-flash")
+	require.NoError(t, err)
+	assert.True(t, available)
+	_, err = PreConsumeUserSubscription("model-match", userID, "deepseek-v4.1-flash", 0, 10)
+	require.NoError(t, err)
+	_, err = PreConsumeUserSubscription("model-match", userID, "gpt-5.6-sol", 0, 10)
+	assert.ErrorContains(t, err, "subscription request model mismatch")
+}
+
 func TestSubscriptionRedemptionCannotExpandServiceBinding(t *testing.T) {
 	_, err := NewSubscriptionRedemption("day", 1, 25, "deepseek-v4.1-flash", "test", 0)
 	require.Error(t, err)
