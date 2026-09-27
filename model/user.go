@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -324,6 +325,16 @@ func CheckUserExistOrDeleted(username string, email string) (bool, error) {
 
 func NormalizeEmail(email string) string {
 	return strings.ToLower(strings.TrimSpace(email))
+}
+
+// IsRegistrationEmailAllowed applies provider-specific anti-alias rules at
+// account creation time without changing how existing accounts authenticate.
+func IsRegistrationEmailAllowed(email string) bool {
+	parts := strings.Split(NormalizeEmail(email), "@")
+	if len(parts) != 2 || parts[1] != "gmail.com" {
+		return true
+	}
+	return regexp.MustCompile(`^[a-z0-9]+$`).MatchString(parts[0])
 }
 
 func emailQuery(tx *gorm.DB, email string) *gorm.DB {
