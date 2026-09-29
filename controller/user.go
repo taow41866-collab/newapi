@@ -248,7 +248,12 @@ func Register(c *gin.Context) {
 			common.ApiErrorI18n(c, i18n.MsgUserEmailVerificationRequired)
 			return
 		}
-		if !common.VerifyCodeWithKey(user.Email, user.VerificationCode, common.EmailVerificationPurpose) {
+		verified, err := model.ConsumeEmailVerification(model.DB, user.Email, common.EmailVerificationPurpose, user.VerificationCode)
+		if err != nil {
+			common.ApiErrorI18n(c, i18n.MsgDatabaseError)
+			return
+		}
+		if !verified {
 			common.ApiErrorI18n(c, i18n.MsgUserVerificationCodeError)
 			return
 		}

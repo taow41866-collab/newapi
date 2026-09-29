@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/oauth"
 	"github.com/QuantumNous/new-api/service"
@@ -31,6 +32,65 @@ import (
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 )
+
+func TestRegistrationEmailDeliveryAndSharedConsumption(t *testing.T) {
+	_, identity := setupSecurityEnrollmentTest(t)
+	require.NoError(t, model.DB.AutoMigrate(&model.EmailVerification{}, &model.Token{}))
+	require.NoError(t, model.LOG_DB.AutoMigrate(&model.Log{}))
+	mailbox := newSecurityMailbox(t)
+	previousRegister, previousPassword, previousEmail := common.RegisterEnabled, common.PasswordRegisterEnabled, common.EmailVerificationEnabled
+	previousDomain, previousAlias := common.EmailDomainRestrictionEnabled, common.EmailAliasRestrictionEnabled
+	previousToken := constant.GenerateDefaultToken
+	common.RegisterEnabled, common.PasswordRegisterEnabled, common.EmailVerificationEnabled = true, true, true
+	common.EmailDomainRestrictionEnabled, common.EmailAliasRestrictionEnabled = false, false
+	constant.GenerateDefaultToken = false
+	t.Cleanup(func() {
+		common.RegisterEnabled, common.PasswordRegisterEnabled, common.EmailVerificationEnabled = previousRegister, previousPassword, previousEmail
+		common.EmailDomainRestrictionEnabled, common.EmailAliasRestrictionEnabled = previousDomain, previousAlias
+		constant.GenerateDefaultToken = previousToken
+	})
+	email := "verification-test@qq.com"
+	response := securityEnrollmentRequest("GET", "/api/verification?email="+email, "", "", identity, SendEmailVerification)
+	var result struct {
+		Success bool   `json:"success"`
+		Data    string `json:"data"`
+	}
+	require.NoError(t, common.Unmarshal(response.Body.Bytes(), &result))
+	require.True(t, result.Success, response.Body.String())
+	mailbox.mutex.Lock()
+	message := mailbox.mail[email][0]
+	mailbox.mutex.Unlock()
+	match := regexp.MustCompile(`<strong>([0-9a-f]{6})</strong>`).FindStringSubmatch(message)
+	require.Len(t, match, 2)
+	for _, attempt := range []struct {
+		code    string
+		success bool
+	}{{"wrong", false}, {match[1], true}, {match[1], false}} {
+		body, err := common.Marshal(map[string]string{"username": "verify-reg", "password": "safe-test-password!42", "email": email, "verification_code": attempt.code})
+		require.NoError(t, err)
+		response = securityEnrollmentRequest("POST", "/api/user/register", string(body), "", identity, Register)
+		require.NoError(t, common.Unmarshal(response.Body.Bytes(), &result))
+		require.Equal(t, attempt.success, result.Success, response.Body.String())
+	}
+	var count int64
+	require.NoError(t, model.DB.Model(&model.User{}).Where("email = ?", email).Count(&count).Error)
+	assert.EqualValues(t, 1, count)
+	response = securityEnrollmentRequest("GET", "/api/reset_password?email="+email, "", "", identity, SendPasswordResetEmail)
+	require.NoError(t, common.Unmarshal(response.Body.Bytes(), &result))
+	require.True(t, result.Success)
+	mailbox.mutex.Lock()
+	message = mailbox.mail[email][len(mailbox.mail[email])-1]
+	mailbox.mutex.Unlock()
+	match = regexp.MustCompile(`token=([0-9a-f]{32})`).FindStringSubmatch(message)
+	require.Len(t, match, 2)
+	body, err := common.Marshal(map[string]string{"email": email, "token": match[1]})
+	require.NoError(t, err)
+	for _, success := range []bool{true, false} {
+		response = securityEnrollmentRequest("POST", "/api/user/reset", string(body), "", identity, ResetPassword)
+		require.NoError(t, common.Unmarshal(response.Body.Bytes(), &result))
+		require.Equal(t, success, result.Success, response.Body.String())
+	}
+}
 
 func TestSecurityAccountDeletionRequiresScopedProof(t *testing.T) {
 	for _, scenario := range []string{"missing", "wrong scope", "expired", "consumed", "other session", "other account", "password disabled", "factor added"} {

@@ -93,10 +93,19 @@ jobs:
         run: go test ./model -run '^TestGetDBTimestampFromTransactionWithSingleConnection$' -count=1
 
       - name: Test root and relaykit modules
+
         env:
           TEST_MYSQL_DSN: root:root@tcp(127.0.0.1:3306)/newapi_test?charset=utf8mb4&parseTime=True&loc=Local
           TEST_POSTGRES_DSN: postgres://postgres:postgres@127.0.0.1:5432/newapi_test?sslmode=disable
         run: make test
+
+      - name: Test shared email verification across SQL engines
+        env:
+          TEST_MYSQL_DSN: root:root@tcp(127.0.0.1:3306)/newapi_test?charset=utf8mb4&parseTime=True&loc=Local
+          TEST_POSTGRES_DSN: postgres://postgres:postgres@127.0.0.1:5432/newapi_test?sslmode=disable
+        run: |
+          TEST_EMAIL_DIALECT=mysql go test ./model -run '^TestSharedEmailVerification$' -count=1
+          TEST_EMAIL_DIALECT=postgres go test ./model -run '^TestSharedEmailVerification$' -count=1
 
   frontend:
     name: Frontend subscription lint, typecheck, test, and build
