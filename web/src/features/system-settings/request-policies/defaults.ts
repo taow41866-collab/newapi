@@ -37,12 +37,25 @@ export type HealthSettings = {
     | 'auto_ban_only'
     | 'passive_recovery'
 }
+export type ProbeSettings = {
+  'probe_setting.platform_models': string
+  'probe_setting.openai_reliable_enabled': boolean
+  'probe_setting.openai_reasoning_effort': 'low' | 'medium' | 'high' | 'xhigh'
+  'probe_setting.scheduling_protection_enabled': boolean
+  'probe_setting.scheduling_failure_threshold': number
+  'probe_setting.scheduling_success_threshold': number
+  'probe_setting.append_probe_error_codes': boolean
+  'probe_setting.first_token_protection_enabled': boolean
+  'probe_setting.first_token_threshold_seconds': number
+  'probe_setting.first_token_minimum_samples': number
+}
 export type FilteringSettings = Pick<
   SecuritySettings,
   'CheckSensitiveEnabled' | 'CheckSensitiveOnPromptEnabled' | 'SensitiveWords'
 >
 export type RequestPolicySettings = RetrySettings &
   HealthSettings &
+  ProbeSettings &
   FilteringSettings &
   Pick<ChannelAffinitySettings, keyof ChannelAffinitySettings>
 
@@ -59,6 +72,16 @@ export const defaultRequestPolicySettings: RequestPolicySettings = {
   'monitor_setting.auto_test_channel_minutes': 10,
   'monitor_setting.channel_test_concurrency': 1,
   'monitor_setting.channel_test_mode': 'scheduled_all',
+  'probe_setting.platform_models': '{}',
+  'probe_setting.openai_reliable_enabled': false,
+  'probe_setting.openai_reasoning_effort': 'high',
+  'probe_setting.scheduling_protection_enabled': false,
+  'probe_setting.scheduling_failure_threshold': 2,
+  'probe_setting.scheduling_success_threshold': 2,
+  'probe_setting.append_probe_error_codes': false,
+  'probe_setting.first_token_protection_enabled': false,
+  'probe_setting.first_token_threshold_seconds': 45,
+  'probe_setting.first_token_minimum_samples': 5,
   'channel_affinity_setting.enabled': false,
   'channel_affinity_setting.session_mode': '',
   'channel_affinity_setting.switch_on_success': true,

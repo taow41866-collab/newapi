@@ -36,9 +36,24 @@ import (
 )
 
 type testResult struct {
-	context     *gin.Context
-	localErr    error
-	newAPIError *types.NewAPIError
+	context               *gin.Context
+	localErr              error
+	newAPIError           *types.NewAPIError
+	firstByteMilliseconds int64
+}
+
+type probeResponseBody struct {
+	io.ReadCloser
+	startedAt             time.Time
+	firstByteMilliseconds int64
+}
+
+func (body *probeResponseBody) Read(buffer []byte) (int, error) {
+	n, err := body.ReadCloser.Read(buffer)
+	if n > 0 && body.firstByteMilliseconds == 0 {
+		body.firstByteMilliseconds = max(int64(1), time.Since(body.startedAt).Milliseconds())
+	}
+	return n, err
 }
 
 func normalizeChannelTestEndpoint(channel *model.Channel, endpointType string) string {
@@ -433,6 +448,7 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, te
 
 	requestBody := bytes.NewBuffer(jsonData)
 	c.Request.Body = io.NopCloser(bytes.NewBuffer(jsonData))
+	requestStartedAt := time.Now()
 	resp, err := adaptor.DoRequest(c, info, requestBody)
 	if err != nil {
 		return testResult{
@@ -442,6 +458,7 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, te
 		}
 	}
 	var httpResp *http.Response
+	var trackedBody *probeResponseBody
 	if resp != nil {
 		httpResp = resp.(*http.Response)
 		if httpResp.StatusCode != http.StatusOK {
@@ -461,6 +478,10 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, te
 				localErr:    err,
 				newAPIError: types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError),
 			}
+		}
+		if httpResp.Body != nil {
+			trackedBody = &probeResponseBody{ReadCloser: httpResp.Body, startedAt: requestStartedAt}
+			httpResp.Body = trackedBody
 		}
 	}
 	usageA, respErr := adaptor.DoResponse(c, httpResp, info)
@@ -516,10 +537,15 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, te
 		Other:            other,
 	})
 	common.SysLog(fmt.Sprintf("testing channel #%d, response: \n%s", channel.Id, string(respBody)))
+	firstByteMilliseconds := int64(0)
+	if trackedBody != nil {
+		firstByteMilliseconds = trackedBody.firstByteMilliseconds
+	}
 	return testResult{
-		context:     c,
-		localErr:    nil,
-		newAPIError: nil,
+		context:               c,
+		localErr:              nil,
+		newAPIError:           nil,
+		firstByteMilliseconds: firstByteMilliseconds,
 	}
 }
 
@@ -728,11 +754,15 @@ func buildTestRequest(model string, endpointType string, channel *model.Channel,
 			}
 		case constant.EndpointTypeOpenAIResponse:
 			// 返回 OpenAIResponsesRequest
-			return &dto.OpenAIResponsesRequest{
+			request := &dto.OpenAIResponsesRequest{
 				Model:  model,
 				Input:  json.RawMessage(`[{"role":"user","content":"hi"}]`),
 				Stream: lo.ToPtr(isStream),
 			}
+			if effort := strings.TrimSpace(operation_setting.GetProbeSetting().OpenAIReasoningEffort); effort != "" {
+				request.Reasoning = &dto.Reasoning{Effort: effort}
+			}
+			return request
 		case constant.EndpointTypeOpenAIResponseCompact:
 			// 返回 OpenAIResponsesCompactionRequest
 			return &dto.OpenAIResponsesCompactionRequest{
@@ -917,11 +947,117 @@ type channelTestSummary struct {
 	Enabled   int `json:"enabled"`
 }
 
+type probeState struct {
+	failures       int
+	successes      int
+	latencySamples []int64
+}
+
+var probeStateByChannel = struct {
+	sync.Mutex
+	values map[int]*probeState
+}{values: make(map[int]*probeState)}
+
+func probePlatformForChannel(channelType int) string {
+	switch channelType {
+	case constant.ChannelTypeOpenAI, constant.ChannelTypeOpenAIMax, constant.ChannelTypeCodex:
+		return "openai"
+	case constant.ChannelTypeAnthropic:
+		return "anthropic"
+	case constant.ChannelTypeGemini, constant.ChannelTypeVertexAi:
+		return "gemini"
+	case constant.ChannelTypeXai:
+		return "grok"
+	case constant.ChannelTypeMoonshot:
+		return "kimi"
+	case constant.ChannelTypeZhipu, constant.ChannelTypeZhipu_v4:
+		return "zhipu"
+	case constant.ChannelTypeDeepSeek:
+		return "deepseek"
+	case constant.ChannelTypeMiniMax:
+		return "minimax"
+	default:
+		return ""
+	}
+}
+
+func probeModelForChannel(channel *model.Channel) string {
+	if channel == nil {
+		return ""
+	}
+	platform := probePlatformForChannel(channel.Type)
+	if platform == "" {
+		return ""
+	}
+	return strings.TrimSpace(operation_setting.GetProbeSetting().PlatformModels[platform])
+}
+
+func probeEndpointForChannel(channel *model.Channel) string {
+	if channel == nil || !operation_setting.GetProbeSetting().OpenAIReliableEnabled {
+		return ""
+	}
+	switch channel.Type {
+	case constant.ChannelTypeOpenAI, constant.ChannelTypeCodex:
+		return string(constant.EndpointTypeOpenAIResponse)
+	default:
+		return ""
+	}
+}
+
+func recordProbeOutcome(channelID int, success bool, settings *operation_setting.ProbeSetting) bool {
+	if settings == nil || !settings.SchedulingProtectionEnabled {
+		return true
+	}
+	probeStateByChannel.Lock()
+	defer probeStateByChannel.Unlock()
+	state := probeStateByChannel.values[channelID]
+	if state == nil {
+		state = &probeState{}
+		probeStateByChannel.values[channelID] = state
+	}
+	if success {
+		state.failures = 0
+		state.successes++
+		return state.successes >= settings.SchedulingSuccessThreshold
+	}
+	state.successes = 0
+	state.failures++
+	return state.failures >= settings.SchedulingFailureThreshold
+}
+
+func recordProbeLatency(channelID int, milliseconds int64, settings *operation_setting.ProbeSetting) bool {
+	if settings == nil || !settings.FirstTokenProtectionEnabled || milliseconds <= 0 {
+		return false
+	}
+	probeStateByChannel.Lock()
+	defer probeStateByChannel.Unlock()
+	state := probeStateByChannel.values[channelID]
+	if state == nil {
+		state = &probeState{}
+		probeStateByChannel.values[channelID] = state
+	}
+	minimumSamples := max(settings.FirstTokenMinimumSamples, 1)
+	state.latencySamples = append(state.latencySamples, milliseconds)
+	if len(state.latencySamples) > minimumSamples {
+		state.latencySamples = state.latencySamples[len(state.latencySamples)-minimumSamples:]
+	}
+	if len(state.latencySamples) < minimumSamples {
+		return false
+	}
+	var latencySum int64
+	for _, sample := range state.latencySamples {
+		latencySum += sample
+	}
+	return latencySum/int64(len(state.latencySamples)) > int64(settings.FirstTokenThresholdSeconds)*1000
+}
+
 func testChannelForHealthCheck(ctx context.Context, channel *model.Channel, testUserID int, allowDisable bool, disableThreshold int64) channelTestSummary {
 	summary := channelTestSummary{}
 	isChannelEnabled := channel.Status == common.ChannelStatusEnabled
 	tik := time.Now()
-	result := testChannel(ctx, channel, testUserID, "", "", shouldUseStreamForAutomaticChannelTest(channel))
+	probeSettings := operation_setting.GetProbeSetting()
+	useStream := shouldUseStreamForAutomaticChannelTest(channel) || probeSettings.FirstTokenProtectionEnabled
+	result := testChannel(ctx, channel, testUserID, probeModelForChannel(channel), probeEndpointForChannel(channel), useStream)
 	milliseconds := time.Since(tik).Milliseconds()
 	if ctx.Err() != nil {
 		return summary
@@ -934,6 +1070,9 @@ func testChannelForHealthCheck(ctx context.Context, channel *model.Channel, test
 	if newAPIError != nil {
 		shouldBanChannel = service.ShouldDisableChannel(result.newAPIError)
 	}
+	if probeSettings.AppendProbeErrorCodes && newAPIError != nil && newAPIError.StatusCode > 0 {
+		shouldBanChannel = true
+	}
 
 	if common.AutomaticDisableChannelEnabled && !shouldBanChannel {
 		if milliseconds > disableThreshold {
@@ -943,6 +1082,19 @@ func testChannelForHealthCheck(ctx context.Context, channel *model.Channel, test
 		}
 	}
 
+	if newAPIError == nil && recordProbeLatency(channel.Id, result.firstByteMilliseconds, probeSettings) {
+		newAPIError = types.NewOpenAIError(
+			fmt.Errorf("首 Token 探针平均耗时超过阈值 %ds", probeSettings.FirstTokenThresholdSeconds),
+			types.ErrorCodeChannelResponseTimeExceeded,
+			http.StatusRequestTimeout,
+		)
+		shouldBanChannel = true
+	}
+	probeOutcomeReady := recordProbeOutcome(channel.Id, newAPIError == nil, probeSettings)
+	if newAPIError != nil && !probeOutcomeReady {
+		shouldBanChannel = false
+	}
+
 	if newAPIError == nil {
 		summary.Succeeded++
 	} else {
@@ -950,11 +1102,16 @@ func testChannelForHealthCheck(ctx context.Context, channel *model.Channel, test
 	}
 
 	if allowDisable && isChannelEnabled && shouldBanChannel && channel.GetAutoBan() {
-		processChannelError(result.context, *types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey, common.GetContextKeyString(result.context, constant.ContextKeyChannelKey), channel.GetAutoBan()), newAPIError, nil)
+		channelError := *types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey, common.GetContextKeyString(result.context, constant.ContextKeyChannelKey), channel.GetAutoBan())
+		if newAPIError != nil && (probeSettings.AppendProbeErrorCodes || newAPIError.GetErrorCode() == types.ErrorCodeChannelResponseTimeExceeded) {
+			service.DisableChannel(channelError, newAPIError.Error())
+		} else {
+			processChannelError(result.context, channelError, newAPIError, nil)
+		}
 		summary.Disabled++
 	}
 
-	if result.localErr == nil && !isChannelEnabled && service.ShouldEnableChannel(newAPIError, channel.Status) {
+	if result.localErr == nil && !isChannelEnabled && service.ShouldEnableChannel(newAPIError, channel.Status) && probeOutcomeReady {
 		service.EnableChannel(channel.Id, common.GetContextKeyString(result.context, constant.ContextKeyChannelKey), channel.Name)
 		summary.Enabled++
 	}

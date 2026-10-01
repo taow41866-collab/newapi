@@ -281,6 +281,25 @@ describe('request policy settings', () => {
     expect(api.put).not.toHaveBeenCalled()
   })
 
+  it('does not offer provider overrides for generic custom channel types', async () => {
+    await renderPolicies('/system-settings/request-policies/probe')
+    expect(await screen.findByText('Platform probe models')).toBeVisible()
+    expect(screen.queryByText('Antigravity')).not.toBeInTheDocument()
+    expect(screen.queryByText('OpenCode Go')).not.toBeInTheDocument()
+  })
+
+  it('does not expose retry status codes that have no probe runtime behavior', async () => {
+    await renderPolicies('/system-settings/request-policies/probe')
+    expect(
+      await screen.findByText(
+        'Probe settings are applied by the existing scheduled channel health task.'
+      )
+    ).toBeVisible()
+    expect(
+      screen.queryByRole('textbox', { name: 'Upstream retry status codes' })
+    ).not.toBeInTheDocument()
+  })
+
   it('a rejected save keeps the edited retry value and allows another save', async () => {
     vi.mocked(api.patch).mockResolvedValue({
       data: { success: false, message: 'Save rejected' },

@@ -42,6 +42,7 @@ func requestPolicyDefaultOptions() map[string]string {
 	for prefix, value := range map[string]any{
 		"channel_affinity_setting.": operation_setting.GetChannelAffinitySetting(),
 		"monitor_setting.":          operation_setting.GetMonitorSetting(),
+		"probe_setting.":            operation_setting.GetProbeSetting(),
 	} {
 		fields, err := config.ConfigToMap(value)
 		if err != nil {
@@ -66,6 +67,9 @@ func requestPolicyDefaultOptions() map[string]string {
 
 func IsRequestPolicyOption(key string) bool {
 	if strings.HasPrefix(key, "channel_affinity_setting.") {
+		return true
+	}
+	if strings.HasPrefix(key, operation_setting.ProbeSettingOptionPrefix) {
 		return true
 	}
 	switch key {
@@ -155,6 +159,9 @@ func BuildRequestPolicy(options map[string]string) (*RequestPolicySnapshot, erro
 		}
 	}
 	if err := operation_setting.ValidateChannelTestConcurrency(raw["monitor_setting.channel_test_concurrency"]); err != nil {
+		return nil, err
+	}
+	if err := operation_setting.ValidateProbeSettingOptions(raw); err != nil {
 		return nil, err
 	}
 	for _, key := range []string{"ChannelDisableThreshold", "monitor_setting.auto_test_channel_minutes"} {
