@@ -56,8 +56,8 @@ func TestSubscriptionV1SettlementUsesDailyTokensNotWalletOrKeyBalance(t *testing
 	t.Cleanup(func() {
 		require.NoError(t, model.DB.Where("user_subscription_id = ?", sub.Id).Delete(&model.SubscriptionV1Usage{}).Error)
 		require.NoError(t, model.DB.Delete(&sub).Error)
-		require.NoError(t, model.DB.Delete(&token).Error)
-		require.NoError(t, model.DB.Delete(&user).Error)
+		require.NoError(t, model.DB.Unscoped().Delete(&token).Error)
+		require.NoError(t, model.DB.Unscoped().Delete(&user).Error)
 	})
 	info := &relaycommon.RelayInfo{
 		RequestId: "subscription-v1-no-wallet", UserId: user.Id, TokenId: token.Id, TokenKey: token.Key,
