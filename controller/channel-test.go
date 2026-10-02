@@ -948,8 +948,6 @@ type channelTestSummary struct {
 }
 
 type probeState struct {
-	failures       int
-	successes      int
 	latencySamples []int64
 }
 
@@ -1004,25 +1002,23 @@ func probeEndpointForChannel(channel *model.Channel) string {
 	}
 }
 
-func recordProbeOutcome(channelID int, success bool, settings *operation_setting.ProbeSetting) bool {
-	if settings == nil || !settings.SchedulingProtectionEnabled {
-		return true
+func recordProbeOutcome(channelID int, success bool, settings *operation_setting.ProbeSetting, requireSuccessThreshold bool) (bool, bool) {
+	if settings == nil {
+		return true, true
 	}
-	probeStateByChannel.Lock()
-	defer probeStateByChannel.Unlock()
-	state := probeStateByChannel.values[channelID]
-	if state == nil {
-		state = &probeState{}
-		probeStateByChannel.values[channelID] = state
+	ready, err := model.UpdateChannelProbeWeight(
+		channelID,
+		success,
+		settings.SchedulingFailureThreshold,
+		settings.SchedulingSuccessThreshold,
+		settings.SchedulingProtectionEnabled,
+		requireSuccessThreshold,
+	)
+	if err != nil {
+		common.SysLog(fmt.Sprintf("failed to update channel probe weight: channel_id=%d, error=%v", channelID, err))
+		return false, false
 	}
-	if success {
-		state.failures = 0
-		state.successes++
-		return state.successes >= settings.SchedulingSuccessThreshold
-	}
-	state.successes = 0
-	state.failures++
-	return state.failures >= settings.SchedulingFailureThreshold
+	return ready, true
 }
 
 func recordProbeLatency(channelID int, milliseconds int64, settings *operation_setting.ProbeSetting) bool {
@@ -1090,12 +1086,24 @@ func testChannelForHealthCheck(ctx context.Context, channel *model.Channel, test
 		)
 		shouldBanChannel = true
 	}
-	probeOutcomeReady := recordProbeOutcome(channel.Id, newAPIError == nil, probeSettings)
+	probeSucceeded := newAPIError == nil && result.localErr == nil
+	probeOutcomeReady, probeOutcomePersisted := recordProbeOutcome(
+		channel.Id,
+		probeSucceeded,
+		probeSettings,
+		!isChannelEnabled && channel.Status == common.ChannelStatusAutoDisabled,
+	)
+	if !probeOutcomePersisted && !probeSucceeded {
+		probeOutcomeReady = true
+	}
 	if newAPIError != nil && !probeOutcomeReady {
 		shouldBanChannel = false
 	}
+	if probeSettings.SchedulingProtectionEnabled && !probeSucceeded && probeOutcomePersisted {
+		shouldBanChannel = false
+	}
 
-	if newAPIError == nil {
+	if probeSucceeded {
 		summary.Succeeded++
 	} else {
 		summary.Failed++

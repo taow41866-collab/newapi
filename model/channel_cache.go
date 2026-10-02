@@ -273,6 +273,17 @@ func CacheUpdateChannelStatus(id int, status int) {
 	}
 }
 
+func CacheUpdateChannelWeight(id int, weight uint) {
+	if !common.MemoryCacheEnabled {
+		return
+	}
+	channelSyncLock.Lock()
+	defer channelSyncLock.Unlock()
+	if channel, ok := channelsIDM[id]; ok {
+		channel.Weight = &weight
+	}
+}
+
 func CacheUpdateChannel(channel *Channel) {
 	if !common.MemoryCacheEnabled {
 		return

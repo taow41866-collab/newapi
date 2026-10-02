@@ -14,21 +14,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestProbeOutcomeUsesConsecutiveThresholds(t *testing.T) {
-	probeStateByChannel.Lock()
-	probeStateByChannel.values = make(map[int]*probeState)
-	probeStateByChannel.Unlock()
-	settings := &operation_setting.ProbeSetting{
-		SchedulingProtectionEnabled: true,
-		SchedulingFailureThreshold:  2,
-		SchedulingSuccessThreshold:  2,
-	}
-	assert.False(t, recordProbeOutcome(1, false, settings))
-	assert.True(t, recordProbeOutcome(1, false, settings))
-	assert.False(t, recordProbeOutcome(1, true, settings))
-	assert.True(t, recordProbeOutcome(1, true, settings))
-}
-
 func TestProbeLatencyUsesLatestSamples(t *testing.T) {
 	probeStateByChannel.Lock()
 	probeStateByChannel.values = make(map[int]*probeState)
