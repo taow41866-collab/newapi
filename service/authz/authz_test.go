@@ -1,13 +1,20 @@
 package authz
 
 import (
+	"context"
+	"errors"
+	"os"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/driver/mysql"
+	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 )
 
@@ -51,6 +58,163 @@ func TestInitSeedsBuiltInRolesAndPoliciesOnce(t *testing.T) {
 	assert.True(t, Can(2, common.RoleAdminUser, ChannelWrite))
 	assert.False(t, Can(2, common.RoleAdminUser, ChannelSensitiveWrite))
 	assert.False(t, Can(3, common.RoleCommonUser, ChannelRead))
+}
+
+func TestInitSeedFailureKeepsExistingPolicies(t *testing.T) {
+	db := newAuthzTestDB(t)
+	require.NoError(t, Init(db))
+	var before []model.CasbinRule
+	require.NoError(t, db.Order("id").Find(&before).Error)
+	require.NotEmpty(t, before)
+
+	const callback = "test:fail-built-in-policy-seed"
+	require.NoError(t, db.Callback().Create().Before("gorm:create").Register(callback, func(tx *gorm.DB) {
+		if tx.Statement.Table == "casbin_rule" {
+			tx.AddError(errors.New("injected policy seed failure"))
+		}
+	}))
+	t.Cleanup(func() { _ = db.Callback().Create().Remove(callback) })
+
+	require.ErrorContains(t, Init(db), "injected policy seed failure")
+	var after []model.CasbinRule
+	require.NoError(t, db.Order("id").Find(&after).Error)
+	assert.Equal(t, before, after, "failed startup must not delete committed authorization policy")
+}
+
+func TestInitSeedDatabaseMatrix(t *testing.T) {
+	tests := []struct {
+		name      string
+		dsnEnv    string
+		dialector func(string) gorm.Dialector
+	}{
+		{name: "sqlite", dialector: func(_ string) gorm.Dialector { return sqlite.Open(":memory:") }},
+		{name: "mysql", dsnEnv: "TEST_MYSQL_DSN", dialector: mysql.Open},
+		{name: "postgres", dsnEnv: "TEST_POSTGRES_DSN", dialector: postgres.Open},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			dsn := ""
+			if test.dsnEnv != "" {
+				dsn = os.Getenv(test.dsnEnv)
+				if dsn == "" {
+					t.Skip(test.dsnEnv + " is not configured")
+				}
+			}
+			db, err := gorm.Open(test.dialector(dsn), &gorm.Config{})
+			require.NoError(t, err)
+			sqlDB, err := db.DB()
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, sqlDB.Close()) })
+			if test.name == "sqlite" {
+				sqlDB.SetMaxOpenConns(1)
+			} else {
+				query := "SELECT DATABASE()"
+				if test.name == "postgres" {
+					query = "SELECT current_database()"
+				}
+				var databaseName string
+				require.NoError(t, db.Raw(query).Scan(&databaseName).Error)
+				if !strings.HasPrefix(databaseName, "codex_authz_") {
+					t.Skip("requires a dedicated codex_authz_ test database")
+				}
+			}
+			wasMaster := common.IsMasterNode
+			common.IsMasterNode = true
+			t.Cleanup(func() { common.IsMasterNode = wasMaster })
+			require.NoError(t, db.AutoMigrate(&model.CasbinRule{}, &model.AuthzRole{}))
+
+			// Start with restricted legacy policies before any baseline exists. On
+			// MySQL PAD SPACE/case-insensitive collations, SQL equality is broader
+			// than the adapter's exact comparisons.
+			spaceScope := model.CasbinRule{Ptype: "p", V0: RoleSubject(BuiltInRoleAdmin), V1: "channel", V2: "operate", V3: EffectAllow, V4: " "}
+			upperPtype := model.CasbinRule{Ptype: "P", V0: RoleSubject(BuiltInRoleAdmin), V1: "channel", V2: "read", V3: EffectAllow, V4: "all"}
+			upperScope := model.CasbinRule{Ptype: "p", V0: RoleSubject(BuiltInRoleAdmin), V1: "channel", V2: "write", V3: EffectAllow, V4: "ALL"}
+			require.NoError(t, db.Create(&spaceScope).Error)
+			require.NoError(t, db.Create(&upperPtype).Error)
+			require.NoError(t, db.Create(&upperScope).Error)
+			require.NoError(t, Init(db))
+			require.NoError(t, Init(db), "restricted legacy policies must survive repeated startup")
+			var restrictedCount, readBaselineCount, writeBaselineCount int64
+			require.NoError(t, db.Model(&model.CasbinRule{}).Where("id = ?", spaceScope.Id).Count(&restrictedCount).Error)
+			require.NoError(t, db.Model(&model.CasbinRule{}).Where("v0 = ? AND v1 = ? AND v2 = ? AND v4 = ? AND v5 = ?",
+				RoleSubject(BuiltInRoleAdmin), "channel", "read", "", "").Count(&readBaselineCount).Error)
+			require.NoError(t, db.Model(&model.CasbinRule{}).Where("v0 = ? AND v1 = ? AND v2 = ? AND v4 = ? AND v5 = ?",
+				RoleSubject(BuiltInRoleAdmin), "channel", "write", "", "").Count(&writeBaselineCount).Error)
+			assert.Equal(t, int64(1), restrictedCount, "an unsupported scope must not be deleted by a broad SQL comparison")
+			assert.False(t, Can(2, common.RoleAdminUser, ChannelOperate), "unsupported scoped policy must still deny")
+			assert.Equal(t, int64(1), readBaselineCount, "an uppercase policy type is not an effective grant")
+			assert.Equal(t, int64(1), writeBaselineCount, "an uppercase scope is not an effective grant")
+			require.NoError(t, db.Delete(&model.CasbinRule{}, []uint{spaceScope.Id, upperPtype.Id, upperScope.Id}).Error)
+			require.NoError(t, Init(db))
+
+			require.NoError(t, Init(db))
+			require.NoError(t, Init(db), "repeated startup must be idempotent")
+			stale := model.CasbinRule{Ptype: "p", V0: RoleSubject(BuiltInRoleAdmin), V1: "obsolete", V2: "read", V3: EffectAllow}
+			scoped := model.CasbinRule{Ptype: "p", V0: RoleSubject(BuiltInRoleAdmin), V1: "channel", V2: "operate", V3: EffectAllow, V4: "own"}
+			legacyAll := model.CasbinRule{Ptype: "p", V0: RoleSubject(BuiltInRoleAdmin), V1: "channel", V2: "read", V3: EffectAllow, V4: "all"}
+			paddedScope := model.CasbinRule{Ptype: "p", V0: RoleSubject(BuiltInRoleAdmin), V1: "channel", V2: "operate", V3: EffectAllow, V4: "all", V5: " "}
+			require.NoError(t, db.Create(&stale).Error)
+			require.NoError(t, db.Create(&scoped).Error)
+			require.NoError(t, db.Create(&legacyAll).Error)
+			require.NoError(t, db.Create(&paddedScope).Error)
+			// A legacy policy may store the default allow effect as SQL NULL.
+			require.NoError(t, db.Exec("INSERT INTO casbin_rule (ptype,v0,v1,v2,v3,v4,v5) VALUES (?,?,?,?,NULL,?,?)",
+				"p", RoleSubject(BuiltInRoleAdmin), "channel", "write", "all", "").Error)
+			require.NoError(t, Init(db), "upgrade must retain scoped rules and restore the built-in baseline")
+			var staleCount, scopedCount, legacyAllCount, legacyNullCount, paddedScopeCount, baselineCount int64
+			require.NoError(t, db.Model(&model.CasbinRule{}).Where("id = ?", stale.Id).Count(&staleCount).Error)
+			require.NoError(t, db.Model(&model.CasbinRule{}).Where("id = ?", scoped.Id).Count(&scopedCount).Error)
+			require.NoError(t, db.Model(&model.CasbinRule{}).Where("id = ?", legacyAll.Id).Count(&legacyAllCount).Error)
+			require.NoError(t, db.Model(&model.CasbinRule{}).Where("id = ?", paddedScope.Id).Count(&paddedScopeCount).Error)
+			require.NoError(t, db.Model(&model.CasbinRule{}).Where("v0 = ? AND v2 = ? AND v3 IS NULL AND v4 = ?",
+				RoleSubject(BuiltInRoleAdmin), "write", "all").Count(&legacyNullCount).Error)
+			require.NoError(t, db.Model(&model.CasbinRule{}).Where("v0 = ? AND v4 = ?", RoleSubject(BuiltInRoleAdmin), "").Count(&baselineCount).Error)
+			assert.Zero(t, staleCount)
+			assert.Equal(t, int64(1), scopedCount)
+			assert.Equal(t, int64(1), legacyAllCount)
+			assert.Equal(t, int64(1), paddedScopeCount)
+			assert.Equal(t, int64(1), legacyNullCount)
+			assert.Equal(t, int64(len(PermissionsForRole(BuiltInRoleAdmin))-2), baselineCount,
+				"an equivalent legacy all-scope allow already supplies the baseline")
+			if test.name != "sqlite" {
+				readerDB, err := gorm.Open(test.dialector(dsn), &gorm.Config{})
+				require.NoError(t, err)
+				readerSQL, err := readerDB.DB()
+				require.NoError(t, err)
+				t.Cleanup(func() { require.NoError(t, readerSQL.Close()) })
+				observed := int64(-1)
+				const visibilityCallback = "test:read-policy-during-seed"
+				require.NoError(t, db.Callback().Create().Before("gorm:create").Register(visibilityCallback, func(tx *gorm.DB) {
+					if tx.Statement.Table != "casbin_rule" {
+						return
+					}
+					ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+					defer cancel()
+					if err := readerDB.WithContext(ctx).Model(&model.CasbinRule{}).
+						Where("v0 = ? AND v4 = ?", RoleSubject(BuiltInRoleAdmin), "").Count(&observed).Error; err != nil {
+						tx.AddError(err)
+					}
+				}))
+				require.NoError(t, Init(db))
+				assert.Equal(t, baselineCount, observed, "a separate process must not observe the deleted policy set")
+				require.NoError(t, db.Callback().Create().Remove(visibilityCallback))
+			}
+
+			var before []model.CasbinRule
+			require.NoError(t, db.Order("id").Find(&before).Error)
+			const callback = "test:fail-policy-seed-matrix"
+			require.NoError(t, db.Callback().Create().Before("gorm:create").Register(callback, func(tx *gorm.DB) {
+				if tx.Statement.Table == "casbin_rule" {
+					tx.AddError(errors.New("injected policy seed failure"))
+				}
+			}))
+			t.Cleanup(func() { _ = db.Callback().Create().Remove(callback) })
+			require.ErrorContains(t, Init(db), "injected policy seed failure")
+			var after []model.CasbinRule
+			require.NoError(t, db.Order("id").Find(&after).Error)
+			assert.Equal(t, before, after, "failed startup must retain the committed policy set")
+		})
+	}
 }
 
 func TestInitOnSlaveOnlyLoadsPolicies(t *testing.T) {

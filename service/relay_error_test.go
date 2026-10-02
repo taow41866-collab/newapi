@@ -1,11 +1,14 @@
 package service
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -13,8 +16,11 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/pkg/modelroute"
+	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	kitdto "github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/setting/system_setting"
 
 	"github.com/gin-gonic/gin"
@@ -23,6 +29,109 @@ import (
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 )
+
+func TestModelRoutingFinishErrorAttribution(t *testing.T) {
+	old := modelroute.Default
+	t.Cleanup(func() { modelroute.Default = old })
+	for _, tc := range []struct {
+		name         string
+		err          *types.NewAPIError
+		cancel       bool
+		wantFactor   float64
+		wantDegraded bool
+	}{
+		{"local-rate-limit", types.NewErrorWithStatusCode(errors.New("local limit"), types.ErrorCodeInvalidRequest, 429), false, 1, false},
+		{"upstream-rate-limit", types.InitOpenAIError("rate_limit_exceeded", 429), false, 0.1, false},
+		{"client-cancel", types.NewOpenAIError(context.Canceled, types.ErrorCodeDoRequestFailed, 500), true, 1, false},
+		{"upstream-timeout", types.NewOpenAIError(context.DeadlineExceeded, types.ErrorCodeDoRequestFailed, 504), false, 0.1, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			modelroute.Default = modelroute.New(modelroute.Config{Mode: "active", Groups: []string{"g"}, Models: []string{"m"}}, modelroute.NewMemoryStore())
+			scope := modelroute.Scope{Group: "g", Model: "m", Endpoint: "/v1/chat/completions"}
+			target := modelroute.Target{ID: 1, Weight: 100}
+			for range 2 {
+				lease, err := modelroute.Default.Begin(context.Background(), scope, target, false)
+				require.NoError(t, err)
+				c, _ := gin.CreateTestContext(httptest.NewRecorder())
+				ctx, cancel := context.WithCancel(context.Background())
+				if tc.cancel {
+					cancel()
+				}
+				c.Request = httptest.NewRequest("POST", scope.Endpoint, nil).WithContext(ctx)
+				info := &relaycommon.RelayInfo{RoutingFirstContentMS: new(atomic.Int64)}
+				FinishModelRoutingAttempt(c, info, lease, time.Now(), tc.err)
+				cancel()
+			}
+			states, err := modelroute.Default.Snapshot(context.Background(), scope, []modelroute.Target{target})
+			require.NoError(t, err)
+			require.Equal(t, tc.wantFactor, states[0].Factor)
+			require.Equal(t, tc.wantDegraded, states[0].Degraded)
+			require.Zero(t, states[0].Inflight)
+		})
+	}
+}
+
+func TestModelRoutingFailureDoesNotDisableWholeChannel(t *testing.T) {
+	oldEngine, oldDisable := modelroute.Default, common.AutomaticDisableChannelEnabled
+	oldRanges := operation_setting.AutomaticDisableStatusCodeRanges
+	t.Cleanup(func() {
+		modelroute.Default = oldEngine
+		common.AutomaticDisableChannelEnabled = oldDisable
+		operation_setting.AutomaticDisableStatusCodeRanges = oldRanges
+	})
+	common.AutomaticDisableChannelEnabled = true
+	operation_setting.AutomaticDisableStatusCodeRanges = []operation_setting.StatusCodeRange{{Start: 401, End: 599}}
+	for _, mode := range []string{"active", "shadow", "off"} {
+		modelroute.Default = modelroute.New(modelroute.Config{Mode: mode, Groups: []string{"default"}, Models: []string{"shared"}}, modelroute.NewMemoryStore())
+		for _, status := range []int{401, 404, 429, 503} {
+			c, _ := gin.CreateTestContext(httptest.NewRecorder())
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"shared","stream":true}`))
+			common.SetContextKey(c, constant.ContextKeyUsingGroup, "default")
+			c.Set("original_model", "shared")
+			c.Set("auto_ban", true)
+			err := types.NewOpenAIError(errors.New("upstream failure"), types.ErrorCodeBadResponseStatusCode, status)
+			RecordPolicyFailure(c, 7, err, PolicyDecision{Action: "retry"})
+			want := "channel_disable_requested"
+			if mode == "active" && status != 401 {
+				want = "unchanged"
+			}
+			require.Equal(t, want, RequestPolicy(c).Events()[1].Health, "mode=%s status=%d", mode, status)
+		}
+	}
+}
+
+func TestModelRoutingPreservesStrictSessionRule(t *testing.T) {
+	oldEngine, oldDB, oldCache := modelroute.Default, model.DB, common.MemoryCacheEnabled
+	setting := operation_setting.GetChannelAffinitySetting()
+	oldSetting := *setting
+	t.Cleanup(func() {
+		modelroute.Default = oldEngine
+		model.DB = oldDB
+		common.MemoryCacheEnabled = oldCache
+		*setting = oldSetting
+	})
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	sqlDB, err := db.DB()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = sqlDB.Close() })
+	require.NoError(t, db.AutoMigrate(&model.Channel{}, &model.Ability{}))
+	model.DB, common.MemoryCacheEnabled = db, false
+	modelroute.Default = modelroute.New(modelroute.Config{Mode: "active", Groups: []string{"default"}, Models: []string{"shared"}}, modelroute.NewMemoryStore())
+	rule := operation_setting.ChannelAffinityRule{Name: "strict-routing-test", ModelRegex: []string{"^shared$"}, SessionMode: "strict", KeySources: []operation_setting.ChannelAffinityKeySource{{Type: "request_header", Key: "X-Session"}}}
+	setting.Enabled, setting.Rules = true, []operation_setting.ChannelAffinityRule{rule}
+	cacheKey := buildChannelAffinityCacheKeySuffix(rule, "shared", "default", t.Name())
+	cache := getChannelAffinityCache()
+	require.NoError(t, cache.SetWithTTL(cacheKey, 999999, time.Minute))
+	t.Cleanup(func() { _, _ = cache.DeleteMany([]string{cacheKey}) })
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"shared"}`))
+	c.Request.Header.Set("X-Session", t.Name())
+	_, _, selectErr := SelectChannelForRequest(c, "shared", &RetryParam{Ctx: c, TokenGroup: "default", ModelName: "shared"})
+	require.Equal(t, "strict", RequestPolicy(c).SessionMode)
+	require.NotNil(t, selectErr)
+	require.Equal(t, "strict_session_binding_unavailable", selectErr.Message)
+}
 
 func TestShouldRetryRelayErrorHonorsChannelPinOnChannelError(t *testing.T) {
 	err := types.NewError(errors.New("channel failed"), types.ErrorCodeChannelNoAvailableKey)

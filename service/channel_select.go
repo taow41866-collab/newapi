@@ -12,6 +12,7 @@ import (
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/jsplugin"
+	"github.com/QuantumNous/new-api/pkg/modelroute"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/gin-gonic/gin"
 )
@@ -117,6 +118,7 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, 
 	selectGroup := param.TokenGroup
 	userGroup := common.GetContextKeyString(param.Ctx, constant.ContextKeyUserGroup)
 	filters := GetChannelConstraints(param.Ctx).Filters
+	routingScope := ModelRoutingScope(param.Ctx, param.TokenGroup, param.ModelName)
 
 	if param.TokenGroup == "auto" {
 		autoGroups := GetRequestAutoGroups(param.Ctx, userGroup)
@@ -152,6 +154,7 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, 
 				param.ModelName,
 				priorityRetry,
 				filters,
+				routingScope,
 			)
 			if channel == nil {
 				// Current group has no available channel for this model, try next group
@@ -195,6 +198,7 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, 
 			param.ModelName,
 			param.GetRetry(),
 			filters,
+			routingScope,
 		)
 		if err != nil {
 			return nil, param.TokenGroup, err
@@ -309,8 +313,25 @@ func SelectChannelForRequest(c *gin.Context, modelName string, retry *RetryParam
 	usingGroup := retry.TokenGroup
 	var channel *model.Channel
 	var selectGroup string
+	// Strict session binding is a hard contract. Soft affinity must not pin
+	// every dynamic-pool request to yesterday's fastest channel.
+	scope := ModelRoutingScope(c, usingGroup, modelName)
+	dynamic := scope != nil && modelroute.Default.Active(*scope)
+	if scope != nil && usingGroup == "auto" {
+		for _, group := range GetRequestAutoGroups(c, common.GetContextKeyString(c, constant.ContextKeyUserGroup)) {
+			candidateScope := *scope
+			candidateScope.Group = group
+			if modelroute.Default.Active(candidateScope) {
+				dynamic = true
+				break
+			}
+		}
+	}
 	if retry.GetRetry() == 0 {
-		if preferredChannelID, found := GetPreferredChannelByAffinity(c, modelName, usingGroup); found {
+		// Resolving affinity also initializes strict retry policy and templates.
+		// Only its soft channel preference may be ignored by dynamic routing.
+		preferredChannelID, found := GetPreferredChannelByAffinity(c, modelName, usingGroup)
+		if found && (!dynamic || RequestPolicy(c).SessionMode == "strict") {
 			affinityUsable := false
 			preferred, err := model.CacheGetChannel(preferredChannelID)
 			affinitySatisfied := false

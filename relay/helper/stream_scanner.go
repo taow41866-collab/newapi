@@ -13,6 +13,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/logger"
+	"github.com/QuantumNous/new-api/pkg/modelroute"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
@@ -269,6 +270,9 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 				continue
 			}
 			if !strings.HasPrefix(data, "[DONE]") {
+				if info.RoutingFirstContentMS != nil && info.RoutingFirstContentMS.Load() == 0 && modelroute.HasContent(data) {
+					info.RoutingFirstContentMS.CompareAndSwap(0, time.Now().UnixMilli())
+				}
 				info.SetFirstResponseTime()
 				info.ReceivedResponseCount++
 

@@ -6,9 +6,52 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
+	"github.com/QuantumNous/new-api/pkg/modelroute"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestModelRoutingCandidatesRespectScopeAndRetries(t *testing.T) {
+	truncateTables(t)
+	oldCache, oldEngine := common.MemoryCacheEnabled, modelroute.Default
+	t.Cleanup(func() { common.MemoryCacheEnabled = oldCache; modelroute.Default = oldEngine; InitChannelCache() })
+	weight := uint(1)
+	high, low := int64(100), int64(1)
+	channels := []Channel{
+		{Id: 930001, Name: "high", Group: "default", Models: "shared", Type: constant.ChannelTypeOpenAI, Status: common.ChannelStatusEnabled, Weight: &weight, Priority: &high},
+		{Id: 930002, Name: "low", Group: "default", Models: "shared", Type: constant.ChannelTypeOpenAI, Status: common.ChannelStatusEnabled, Weight: &weight, Priority: &low},
+		{Id: 930003, Name: "private", Group: "private", Models: "shared", Type: constant.ChannelTypeOpenAI, Status: common.ChannelStatusEnabled, Weight: &weight, Priority: &high},
+		{Id: 930004, Name: "other-model", Group: "default", Models: "other", Type: constant.ChannelTypeOpenAI, Status: common.ChannelStatusEnabled, Weight: &weight, Priority: &high},
+	}
+	for i := range channels {
+		require.NoError(t, channels[i].Insert())
+	}
+	InitChannelCache()
+	scope := &modelroute.Scope{Group: "default", Model: "shared", Endpoint: "/v1/chat/completions", Excluded: []int{930001}}
+	for _, cached := range []bool{false, true} {
+		common.MemoryCacheEnabled = cached
+		InitChannelCache()
+		modelroute.Default = modelroute.New(modelroute.Config{Mode: "active", Groups: []string{"default"}, Models: []string{"shared"}}, modelroute.NewMemoryStore())
+		candidates, err := ModelRoutingCandidates("default", "shared", nil)
+		require.NoError(t, err)
+		ids := make([]int, 0, len(candidates))
+		for _, c := range candidates {
+			ids = append(ids, c.Id)
+		}
+		require.ElementsMatch(t, []int{930001, 930002}, ids)
+		chosen, err := GetRandomSatisfiedChannel("default", "shared", 0, nil, scope)
+		require.NoError(t, err)
+		require.NotNil(t, chosen)
+		require.Equal(t, 930002, chosen.Id, "active routing must reach lower priority eligible target on retry")
+		for _, mode := range []string{"off", "shadow"} {
+			modelroute.Default = modelroute.New(modelroute.Config{Mode: mode, Groups: []string{"default"}, Models: []string{"shared"}}, modelroute.NewMemoryStore())
+			chosen, err = GetRandomSatisfiedChannel("default", "shared", 0, nil, scope)
+			require.NoError(t, err)
+			require.NotNil(t, chosen)
+			require.Equal(t, 930001, chosen.Id, "off/shadow must retain legacy priority")
+		}
+	}
+}
 
 func TestTaskPluginChannelSelectionFiltersBothCachePaths(t *testing.T) {
 	truncateTables(t)

@@ -13,6 +13,7 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/logger"
+	"github.com/QuantumNous/new-api/pkg/modelroute"
 	kitdto "github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 )
@@ -119,7 +120,11 @@ func GetRandomSatisfiedChannel(
 	model string,
 	retry int,
 	filters []dto.ChannelFilter,
+	scopes ...*modelroute.Scope,
 ) (*Channel, error) {
+	if channel, handled := selectModelRoute(group, model, filters, scopes); handled {
+		return channel, nil
+	}
 	// if memory cache is disabled, get channel directly from database
 	if !common.MemoryCacheEnabled {
 		return GetChannel(group, model, retry, filters)

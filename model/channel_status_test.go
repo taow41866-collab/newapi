@@ -261,10 +261,12 @@ func TestChannelProbeWeightSQLDialects(t *testing.T) {
 			DB = testDB
 			common.MemoryCacheEnabled = false
 			common.SetMainDatabaseType(test.dbType)
+			initCol()
 			t.Cleanup(func() {
 				DB = previousDB
 				common.MemoryCacheEnabled = previousMemoryCache
 				common.SetMainDatabaseType(previousType)
+				initCol()
 			})
 
 			weight := uint(60)
@@ -292,6 +294,16 @@ func TestChannelProbeWeightSQLDialects(t *testing.T) {
 			_, err = UpdateChannelProbeWeight(channel.Id, true, 2, 2, true, false)
 			require.NoError(t, err)
 			assert.Equal(t, 60, mustGetChannelWeight(t, channel.Id))
+			candidates, err := ModelRoutingCandidates("default", "gpt-test", nil)
+			require.NoError(t, err)
+			ids := make([]int, 0, len(candidates))
+			for _, candidate := range candidates {
+				ids = append(ids, candidate.Id)
+			}
+			assert.Contains(t, ids, channel.Id, "model routing query must work on each real SQL dialect")
+			candidates, err = ModelRoutingCandidates("not-authorized", "gpt-test", nil)
+			require.NoError(t, err)
+			assert.Empty(t, candidates)
 		})
 	}
 }

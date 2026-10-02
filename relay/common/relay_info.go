@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
@@ -91,7 +92,9 @@ type RelayInfo struct {
 	TokenUnlimited    bool
 	StartTime         time.Time
 	FirstResponseTime time.Time
-	isFirstResponse   bool
+	// Separate from billing/legacy first-frame timing; one atomic per attempt.
+	RoutingFirstContentMS *atomic.Int64
+	isFirstResponse       bool
 	//SendLastReasoningResponse bool
 	IsStream               bool
 	IsGeminiBatchEmbedding bool
@@ -159,18 +162,18 @@ type RelayInfo struct {
 	SubscriptionAmountUsedAfterPreConsume int64
 	// SubscriptionV1Billing marks the raw-token billing path; it must never
 	// enter the quota-based wallet/API-key settlement path.
-	SubscriptionV1Billing        bool
-	SubscriptionV1RequestStarted bool
-	SubscriptionV1RequestID      string
+	SubscriptionV1Billing           bool
+	SubscriptionV1RequestStarted    bool
+	SubscriptionV1RequestID         string
 	SubscriptionV1SelectedChannelID int
-	SubscriptionV1SelectedModel    string
-	IsClaudeBetaQuery                     bool // /v1/messages?beta=true
-	IsChannelTest                         bool // channel test request
-	RetryIndex                            int
-	LastError                             *types.NewAPIError
-	RuntimeHeadersOverride                map[string]any
-	UseRuntimeHeadersOverride             bool
-	ParamOverrideAudit                    []string
+	SubscriptionV1SelectedModel     string
+	IsClaudeBetaQuery               bool // /v1/messages?beta=true
+	IsChannelTest                   bool // channel test request
+	RetryIndex                      int
+	LastError                       *types.NewAPIError
+	RuntimeHeadersOverride          map[string]any
+	UseRuntimeHeadersOverride       bool
+	ParamOverrideAudit              []string
 
 	PriceData hosttypes.PriceData
 

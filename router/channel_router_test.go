@@ -24,6 +24,15 @@ func TestChannelDefaultBaseURLsRequireReadPermission(t *testing.T) {
 	assert.Equal(t, http.StatusUnauthorized, recorder.Code)
 }
 
+func TestModelRoutingDiagnosticsRequireChannelRead(t *testing.T) {
+	assertChannelRoutePermission(t, http.MethodGet, "/model-routing", authz.ChannelRead, controller.GetModelRouting)
+	engine := gin.New()
+	registerChannelRoutes(engine.Group("/api"))
+	response := httptest.NewRecorder()
+	engine.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/channel/model-routing?group=default&model=test", nil))
+	require.Equal(t, http.StatusUnauthorized, response.Code)
+}
+
 func TestChannelStatusRoutesUseExpectedPermissions(t *testing.T) {
 	assertChannelRoutePermission(t, http.MethodGet, "/:id/vllm/status", authz.ChannelRead, controller.GetVLLMChannelStatus)
 	assertChannelRoutePermission(t, http.MethodGet, "/:id/sglang/status", authz.ChannelRead, controller.GetSGLangChannelStatus)

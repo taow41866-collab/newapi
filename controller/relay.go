@@ -187,6 +187,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			relayInfo.SubscriptionV1RequestStarted = true
 		}
 
+		routingLease, routingStarted := service.BeginModelRoutingAttempt(c, relayInfo, channel.Id)
 		switch relayFormat {
 		case types.RelayFormatOpenAIRealtime:
 			newAPIError = relay.WssHelper(c, relayInfo)
@@ -197,6 +198,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		default:
 			newAPIError = relayHandler(c, relayInfo)
 		}
+		service.FinishModelRoutingAttempt(c, relayInfo, routingLease, routingStarted, newAPIError)
 
 		if newAPIError == nil {
 			service.MarkRequestPolicySuccess(c, relayInfo.StreamStatus)

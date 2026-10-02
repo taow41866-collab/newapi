@@ -1,7 +1,7 @@
 package authz
 
 import (
-	"fmt"
+	"slices"
 
 	"github.com/QuantumNous/new-api/model"
 	"gorm.io/gorm"
@@ -39,28 +39,66 @@ func resetBuiltInRolePolicies(db *gorm.DB) error {
 	for _, spec := range builtInRoles {
 		subjects = append(subjects, RoleSubject(spec.Key))
 	}
-	// Scoped legacy rules must survive baseline reseeding so the adapter can
-	// retain their restrictions instead of replacing them with global grants.
-	return db.Where("ptype = ? AND v0 IN ?", "p", subjects).
-		Where("(v4 = ? OR v4 IS NULL) AND (v5 = ? OR v5 IS NULL)", "", "").
-		Delete(&model.CasbinRule{}).Error
+	// SQL equality can be case-insensitive and ignore trailing spaces on MySQL.
+	// Match the adapter's exact policy semantics before deleting by primary key;
+	// a scoped legacy deny must survive baseline reseeding.
+	var candidates []model.CasbinRule
+	if err := db.Select("id", "ptype", "v0", "v4", "v5").
+		Where("ptype = ? AND v0 IN ?", "p", subjects).Find(&candidates).Error; err != nil {
+		return err
+	}
+	ids := make([]uint, 0, len(candidates))
+	for _, rule := range candidates {
+		if rule.Ptype == "p" && slices.Contains(subjects, rule.V0) && rule.V4 == "" && rule.V5 == "" {
+			ids = append(ids, rule.Id)
+		}
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	return db.Where("id IN ?", ids).Delete(&model.CasbinRule{}).Error
 }
 
-func seedDefaultPolicies() error {
-	e := currentEnforcer()
-	if e == nil {
-		return fmt.Errorf("authz enforcer is not initialized")
+func seedDefaultPolicies(db *gorm.DB) error {
+	type policyKey struct{ subject, resource, action string }
+	subjects := make([]string, 0, len(builtInRoles))
+	for _, spec := range builtInRoles {
+		if !spec.Superuser {
+			subjects = append(subjects, RoleSubject(spec.Key))
+		}
+	}
+	if len(subjects) == 0 {
+		return nil
+	}
+	var legacyAll []model.CasbinRule
+	if err := db.Where("ptype = ? AND v0 IN ? AND v4 = ? AND (v5 = ? OR v5 IS NULL) AND (v3 = ? OR v3 = ? OR v3 IS NULL)",
+		"p", subjects, "all", "", "", EffectAllow).Find(&legacyAll).Error; err != nil {
+		return err
+	}
+	covered := make(map[policyKey]bool, len(legacyAll))
+	for _, rule := range legacyAll {
+		// MySQL collations may match ALL or padded scopes here, while the
+		// adapter treats only exact all/empty as a usable global grant.
+		if rule.Ptype != "p" || rule.V4 != "all" || rule.V5 != "" || (rule.V3 != "" && rule.V3 != EffectAllow) {
+			continue
+		}
+		covered[policyKey{rule.V0, rule.V1, rule.V2}] = true
 	}
 
+	rules := make([]model.CasbinRule, 0)
 	for _, spec := range builtInRoles {
 		if spec.Superuser {
 			continue
 		}
 		for _, permission := range PermissionsForRole(spec.Key) {
-			if _, err := e.AddPolicy(RoleSubject(spec.Key), permission.Resource, permission.Action, EffectAllow); err != nil {
-				return err
+			subject := RoleSubject(spec.Key)
+			if !covered[policyKey{subject, permission.Resource, permission.Action}] {
+				rules = append(rules, newRule("p", []string{subject, permission.Resource, permission.Action, EffectAllow}))
 			}
 		}
 	}
-	return nil
+	if len(rules) == 0 {
+		return nil
+	}
+	return db.Clauses(clause.OnConflict{DoNothing: true}).Create(&rules).Error
 }

@@ -8,6 +8,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/pkg/modelroute"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 )
@@ -19,6 +20,7 @@ import (
 // service.StartSystemTaskRunner.
 func RegisterScheduledSystemTasks() {
 	service.RegisterSystemTaskHandler(channelTestHandler{})
+	service.RegisterSystemTaskHandler(modelRoutingProbeHandler{})
 	service.RegisterSystemTaskHandler(modelUpdateHandler{})
 	service.RegisterSystemTaskHandler(midjourneyPollHandler{})
 	service.RegisterSystemTaskHandler(asyncTaskPollHandler{})
@@ -44,6 +46,19 @@ func (channelTestHandler) Interval() time.Duration {
 }
 
 func (channelTestHandler) NewPayload() any { return nil }
+
+const modelRoutingProbeTaskType = "model_routing_probe"
+
+// Model probes have their own cadence; enabling them never starts or changes
+// legacy monitoring for channels outside the configured model pool.
+type modelRoutingProbeHandler struct{ channelTestHandler }
+
+func (modelRoutingProbeHandler) Type() string            { return modelRoutingProbeTaskType }
+func (modelRoutingProbeHandler) Enabled() bool           { return modelroute.Default.Config().Mode == "active" }
+func (modelRoutingProbeHandler) Interval() time.Duration { return 15 * time.Minute }
+func (modelRoutingProbeHandler) NewPayload() any {
+	return channelTestTaskPayload{Mode: modelRoutingProbeTaskType}
+}
 
 // channelTestTaskPayload controls one channel_test run. A nil/empty payload is a
 // scheduled run, which uses the configured monitor ChannelTestMode and does not

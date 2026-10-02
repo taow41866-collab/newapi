@@ -11,6 +11,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestModelRoutingTargetResolvesMappingChain(t *testing.T) {
+	mapping := `{"public-model":"alias","alias":"upstream-model"}`
+	channel := &Channel{Id: 1, ModelMapping: &mapping}
+	require.Equal(t, "upstream-model", ModelRoutingTarget(channel, "public-model").Upstream)
+}
+
 func TestFilterCandidateIDs(t *testing.T) {
 	alphaSetting := `{"task_plugin_key":"alpha"}`
 	betaSetting := `{"task_plugin_key":"beta"}`

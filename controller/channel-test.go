@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
@@ -19,6 +20,7 @@ import (
 	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
+	"github.com/QuantumNous/new-api/pkg/modelroute"
 	"github.com/QuantumNous/new-api/relay"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
@@ -36,6 +38,7 @@ import (
 )
 
 type testResult struct {
+	routingInfo           *relaycommon.RelayInfo
 	context               *gin.Context
 	localErr              error
 	newAPIError           *types.NewAPIError
@@ -84,7 +87,7 @@ func resolveChannelTestUserID(c *gin.Context) (int, error) {
 	return rootUser.Id, nil
 }
 
-func testChannel(ctx context.Context, channel *model.Channel, testUserID int, testModel string, endpointType string, isStream bool) testResult {
+func testChannel(ctx context.Context, channel *model.Channel, testUserID int, testModel string, endpointType string, isStream bool, routingScopes ...modelroute.Scope) (testOutcome testResult) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -243,6 +246,19 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, te
 	}
 
 	request := buildTestRequest(testModel, endpointType, channel, isStream)
+	if len(routingScopes) > 0 {
+		// Match the actual observed effort without mutating global probe settings.
+		effort := routingScopes[0].Effort
+		switch req := request.(type) {
+		case *dto.OpenAIResponsesRequest:
+			req.Reasoning = nil
+			if effort != "" {
+				req.Reasoning = &dto.Reasoning{Effort: effort}
+			}
+		case *dto.GeneralOpenAIRequest:
+			req.ReasoningEffort = effort
+		}
+	}
 
 	info, err := relaycommon.GenRelayInfo(c, relayFormat, request, nil)
 
@@ -449,6 +465,8 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, te
 	requestBody := bytes.NewBuffer(jsonData)
 	c.Request.Body = io.NopCloser(bytes.NewBuffer(jsonData))
 	requestStartedAt := time.Now()
+	info.RoutingFirstContentMS = new(atomic.Int64)
+	defer func() { testOutcome.routingInfo = info }()
 	resp, err := adaptor.DoRequest(c, info, requestBody)
 	if err != nil {
 		return testResult{
@@ -1048,6 +1066,9 @@ func recordProbeLatency(channelID int, milliseconds int64, settings *operation_s
 }
 
 func testChannelForHealthCheck(ctx context.Context, channel *model.Channel, testUserID int, allowDisable bool, disableThreshold int64) channelTestSummary {
+	if summary, managed := testModelRoutingHealth(ctx, channel, testUserID); managed {
+		return summary
+	}
 	summary := channelTestSummary{}
 	isChannelEnabled := channel.Status == common.ChannelStatusEnabled
 	tik := time.Now()
@@ -1263,7 +1284,7 @@ func runChannelTestTask(ctx context.Context, mode string, notify bool, report fu
 	if strings.TrimSpace(mode) == "" {
 		mode = operation_setting.GetMonitorSetting().ChannelTestMode
 	}
-	selected := selectChannelsForAutomaticTest(channels, mode)
+	selected := selectChannelsForAutomaticTest(channels, mode, notify)
 	allowDisable := mode != operation_setting.ChannelTestModePassiveRecovery
 	concurrency := operation_setting.GetMonitorSetting().ChannelTestConcurrency
 	summary := performChannelTests(ctx, selected, testUserID, allowDisable, concurrency, report)
@@ -1273,11 +1294,20 @@ func runChannelTestTask(ctx context.Context, mode string, notify bool, report fu
 	return summary, nil
 }
 
-func selectChannelsForAutomaticTest(channels []*model.Channel, mode string) []*model.Channel {
+func selectChannelsForAutomaticTest(channels []*model.Channel, mode string, manual ...bool) []*model.Channel {
 	selected := make([]*model.Channel, 0, len(channels))
 	for _, channel := range channels {
 		if channel.Status == common.ChannelStatusManuallyDisabled {
 			continue
+		}
+		if mode == modelRoutingProbeTaskType {
+			if modelRoutingChannelManaged(channel) && channel.Status == common.ChannelStatusEnabled {
+				selected = append(selected, channel)
+			}
+			continue
+		}
+		if channel.Status == common.ChannelStatusEnabled && modelRoutingChannelManaged(channel) && (len(manual) == 0 || !manual[0]) {
+			continue // The dedicated model task owns these scheduled observations.
 		}
 		if mode == operation_setting.ChannelTestModeAutoBanOnly && !channel.GetAutoBan() {
 			continue

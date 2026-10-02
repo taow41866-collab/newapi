@@ -13,12 +13,13 @@ import (
 func TestModelMappedHelperRejectsSubscriptionV1RouteDrift(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	for _, test := range []struct {
-		name       string
-		channelID  int
-		modelMap   string
+		name      string
+		channelID int
+		modelMap  string
 	}{
 		{name: "mapped to a different upstream model", channelID: 24, modelMap: `{"deepseek-v4.1-flash":"other-model"}`},
 		{name: "mapped through a different channel", channelID: 25},
+		{name: "self mapping cannot bypass channel binding", channelID: 25, modelMap: `{"deepseek-v4.1-flash":"deepseek-v4.1-flash"}`},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			ctx, _ := gin.CreateTestContext(httptest.NewRecorder())

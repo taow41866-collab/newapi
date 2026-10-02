@@ -22,6 +22,15 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     services:
+      routing-redis:
+        image: redis:7.4-alpine
+        ports:
+          - 6389:6379
+        options: >-
+          --health-cmd="redis-cli ping"
+          --health-interval=5s
+          --health-timeout=3s
+          --health-retries=10
       mysql:
         image: mysql:8.0
         env:
@@ -106,6 +115,25 @@ jobs:
         run: |
           TEST_EMAIL_DIALECT=mysql go test ./model -run '^TestSharedEmailVerification$' -count=1
           TEST_EMAIL_DIALECT=postgres go test ./model -run '^TestSharedEmailVerification$' -count=1
+
+      - name: Test authorization seeding across SQL engines
+        env:
+          MYSQL_PWD: root
+          PGPASSWORD: postgres
+          TEST_MYSQL_DSN: root:root@tcp(127.0.0.1:3306)/codex_authz_ci?charset=utf8mb4&parseTime=True&loc=Local
+          TEST_POSTGRES_DSN: postgres://postgres:postgres@127.0.0.1:5432/codex_authz_ci?sslmode=disable
+        run: |
+          mysql -h 127.0.0.1 -u root -e 'CREATE DATABASE codex_authz_ci CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci'
+          psql -h 127.0.0.1 -U postgres -d newapi_test -v ON_ERROR_STOP=1 -c 'CREATE DATABASE codex_authz_ci'
+          go test ./service/authz -run '^TestInitSeedDatabaseMatrix$' -count=1
+
+      - name: Test model routing with real Redis and independent gateways
+        env:
+          MODEL_ROUTE_TEST_REDIS: 127.0.0.1:6389
+          MODEL_ROUTE_ALLOW_REDIS_PAUSE: '1'
+        run: |
+          go test ./pkg/modelroute -run '^TestModelRoutingRealRedisProcesses$' -count=1 -timeout 90s
+          go test ./controller -run '^TestModelRoutingTwoGatewayProcesses$' -count=1 -timeout 90s
 
   frontend:
     name: Frontend subscription lint, typecheck, test, and build

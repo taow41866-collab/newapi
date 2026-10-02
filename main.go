@@ -24,6 +24,7 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/oauth"
 	"github.com/QuantumNous/new-api/pkg/jsplugin"
+	"github.com/QuantumNous/new-api/pkg/modelroute"
 	perfmetrics "github.com/QuantumNous/new-api/pkg/perf_metrics"
 	"github.com/QuantumNous/new-api/pkg/wsmanager"
 	"github.com/QuantumNous/new-api/relay"
@@ -64,6 +65,12 @@ func main() {
 	}
 
 	common.SysLog("New API " + common.Version + " started")
+	closeRouting, err := modelroute.ConfigureFromEnv()
+	if err != nil {
+		common.FatalLog(err.Error())
+		return
+	}
+	defer closeRouting()
 	if os.Getenv("GIN_MODE") != "debug" {
 		gin.SetMode(gin.ReleaseMode)
 	}

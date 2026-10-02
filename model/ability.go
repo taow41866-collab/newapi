@@ -9,6 +9,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
+	"github.com/QuantumNous/new-api/pkg/modelroute"
 
 	"github.com/samber/lo"
 	"gorm.io/gorm"
@@ -110,7 +111,11 @@ func GetChannel(
 	model string,
 	retry int,
 	filters []dto.ChannelFilter,
+	scopes ...*modelroute.Scope,
 ) (*Channel, error) {
+	if channel, handled := selectModelRoute(group, model, filters, scopes); handled {
+		return channel, nil
+	}
 	var abilities []Ability
 	err := DB.Where(commonGroupCol+" = ? and model = ? and enabled = ?", group, model, true).Order("priority DESC, weight DESC").Find(&abilities).Error
 	if err != nil {
