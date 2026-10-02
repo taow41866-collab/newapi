@@ -3000,6 +3000,7 @@
     "Inherit vendor icon": "继承供应商图标",
     "Inherited": "继承",
     "Inherited from {{vendor}}": "继承自 {{vendor}}",
+    "Infinite Canvas": "无限画布",
     "Initial quota given to new users": "授予新用户的初始配额",
     "Initial quota given to new users ({{formattedQuota}})": "授予新用户的初始配额（{{formattedQuota}}）",
     "Initialization failed, please try again.": "初始化失败，请重试。",

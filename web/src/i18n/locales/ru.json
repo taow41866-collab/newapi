@@ -2999,6 +2999,7 @@
     "Inherit vendor icon": "Использовать иконку поставщика",
     "Inherited": "Наследуется",
     "Inherited from {{vendor}}": "От поставщика {{vendor}}",
+    "Infinite Canvas": "Бесконечный холст",
     "Initial quota given to new users": "Начальная квота, предоставляемая новым пользователям",
     "Initial quota given to new users ({{formattedQuota}})": "Начальная квота, предоставляемая новым пользователям ({{formattedQuota}})",
     "Initialization failed, please try again.": "Инициализация не удалась, попробуйте ещё раз.",

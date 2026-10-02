@@ -27,6 +27,7 @@ import {
   LayoutDashboard,
   ListTodo,
   MessageSquare,
+  PenTool,
   PlugZap,
   Radio,
   ServerCog,
@@ -40,6 +41,8 @@ import {
 import { useTranslation } from 'react-i18next'
 
 import type { SidebarData } from '@/components/layout/types'
+import { useChatPresets } from '@/features/chat/hooks/use-chat-presets'
+import { isInfiniteCanvasPreset } from '@/features/chat/lib/chat-links'
 import { ROLE } from '@/lib/roles'
 
 /**
@@ -50,6 +53,8 @@ import { ROLE } from '@/lib/roles'
  */
 export function useSidebarData(): SidebarData {
   const { t } = useTranslation()
+  const { chatPresets } = useChatPresets()
+  const canvasPreset = chatPresets.find(isInfiniteCanvasPreset)
 
   return {
     navGroups: [
@@ -62,6 +67,15 @@ export function useSidebarData(): SidebarData {
             url: '/playground',
             icon: FlaskConical,
           },
+          ...(canvasPreset
+            ? [
+                {
+                  title: t('Infinite Canvas'),
+                  url: `/chat/${canvasPreset.id}`,
+                  icon: PenTool,
+                },
+              ]
+            : []),
           {
             title: t('Chat'),
             icon: MessageSquare,

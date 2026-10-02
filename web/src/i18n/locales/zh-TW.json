@@ -2999,6 +2999,7 @@
     "Inherit vendor icon": "繼承供應商圖示",
     "Inherited": "繼承",
     "Inherited from {{vendor}}": "繼承自 {{vendor}}",
+    "Infinite Canvas": "無限畫布",
     "Initial quota given to new users": "授予新用戶的初始配額",
     "Initial quota given to new users ({{formattedQuota}})": "授予新用戶的初始配額（{{formattedQuota}}）",
     "Initialization failed, please try again.": "初始化失敗，請重試。",

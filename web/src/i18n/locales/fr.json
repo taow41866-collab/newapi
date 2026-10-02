@@ -2999,6 +2999,7 @@
     "Inherit vendor icon": "Hériter de l’icône du fournisseur",
     "Inherited": "Hérité",
     "Inherited from {{vendor}}": "Héritée de {{vendor}}",
+    "Infinite Canvas": "Canevas infini",
     "Initial quota given to new users": "Quota initial donné aux nouveaux utilisateurs",
     "Initial quota given to new users ({{formattedQuota}})": "Quota initial donné aux nouveaux utilisateurs ({{formattedQuota}})",
     "Initialization failed, please try again.": "L'initialisation a échoué, veuillez réessayer.",

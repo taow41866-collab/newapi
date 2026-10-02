@@ -5,12 +5,13 @@
 - 上游：`basketikun/infinite-canvas`，固定提交 `dab19adc0847e32e39b7fc8ff90cb392561fb826`，显示版本 `v0.19.0`。
 - New API 基线：`a5a347f137d35601bdfcb97fc0747f0933f9966d`。不修改后端源码、镜像、渠道、计费或数据库结构。
 - 部署日期：2026-10-03，香港服务器现有 Caddy 静态站点目录；不新增服务容器，不重启 New API。
-- 直接入口：`https://lpss.online/canvas/canvas`；登录后通过侧栏聊天预设「无限画布」进入，现有预设追加索引为 10，即 `/chat/10`。
+- 直接入口：`https://lpss.online/canvas/canvas`；登录后通过侧栏「游乐场」旁的一级入口「无限画布」进入。当前链接为 `/chat/10`，前端按预设动态定位索引，不固定写死 10；聊天子菜单不再重复显示画布。
 
 ## 文件与契约
 
 - `upstream.patch`：子路径路由、图标、插件、默认网关和 URL 片段凭据导入，以及 6 项回归测试。锁文件只替换下载源域名为官方 npm，版本及 integrity 不变。
 - `deploy.py`：本次香港部署脚本，依赖现有 Docker 容器名称、MySQL 配置和站点目录，仅适用于此固定部署的首次接入；已存在画布路由时拒绝执行。
+- `deploy-sidebar.py`：发布 New API 一级画布导航的静态前端，不替换后端镜像；保留旧嵌入前端的 `/static/*` 资源回退，避免已打开页面及文档的旧哈希资源失效。
 - `LICENSE.upstream`：保留上游 MIT 许可；产物中也包含 `LICENSE`。New API 原有许可及归属信息不变。
 - `verification.json`：实际验收结果及边界，不代表真实收费生成已验收。
 
@@ -47,6 +48,14 @@ Copy-Item ..\LICENSE dist\LICENSE
 - 两个 New API 副本均同步新预设，原 10 个预设保留；主页、`/api/status`、`/healthz` 返回 200，业务副本无重启。
 
 仍未验收：真实用户的付费生图、生视频、音频及复杂插件调用；不宣称全仓学习或所有能力可用。
+
+## 一级导航追加发布
+
+2026-10-03 将画布提升为独立一级入口，复用既有侧栏链接、移动端关闭逻辑及 `/chat/$chatId` 的认证和个人令牌接线。通过已配置的画布 URL 路径识别预设，不依赖名称或固定数组索引；非法 URL 或缺少预设时不展示损坏链接，其他聊天预设保持原位置。新增七种界面语言文案。
+
+实际结果：新增 7 项导航回归测试及既有 13 项侧栏测试共 20 项通过；New API `bun run typecheck`、改动文件 oxlint/oxfmt 检查、`bun run build` 均通过。模拟登录浏览器实测独立一级链接只出现一次、桌面与手机点击进入画布，且无失败资源和未捕获错误。模拟登录不代表真实收费生成验收。
+
+新前端归档 SHA256：`f29ae12048c8bae4c15720cadeea4eaaf7dec81683de4736c58ad37eb2b43975`。发布目录为 `/srv/new-api/cn2-20260921/original-config/site/newapi-canvas-nav-f29ae12048c8`，配置备份为 `/srv/new-api/cn2-20260921/canvas-navigation/20261003-013524`。若需回滚导航，先检查期间是否有其他配置修改，再原位恢复该目录的 `Caddyfile.before` 并发送 SIGUSR1；此备份保留已上线的画布挂载和 Chats 预设，不回滚整个画布。
 
 ## 线上位置与回滚
 

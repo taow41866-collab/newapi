@@ -94,6 +94,15 @@ export function chatLinkRequiresApiKey(url: string): boolean {
   )
 }
 
+export function isInfiniteCanvasPreset(preset: ChatPreset): boolean {
+  if (preset.type !== 'web') return false
+  try {
+    return new URL(preset.url).pathname === '/canvas/canvas'
+  } catch {
+    return false
+  }
+}
+
 export function parseChatConfig(raw: RawChatConfig): ChatPreset[] {
   let parsed: unknown = raw
 

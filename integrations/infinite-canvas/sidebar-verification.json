@@ -1,0 +1,18 @@
+{
+  "date": "2026-10-03",
+  "tests": { "passed": 20, "failed": 0 },
+  "typecheck_exit": 0,
+  "lint_exit": 0,
+  "format_check_exit": 0,
+  "production_build_exit": 0,
+  "desktop_top_level_canvas_link": true,
+  "mobile_top_level_canvas_link": true,
+  "duplicate_nested_canvas_removed": true,
+  "dynamic_preset_index": true,
+  "authentication": "Browser-mocked user and key; existing server authentication unchanged",
+  "backend_containers_restarted": false,
+  "previous_embedded_static_assets_preserved": true,
+  "bundle_sha256": "f29ae12048c8bae4c15720cadeea4eaaf7dec81683de4736c58ad37eb2b43975",
+  "release_directory": "/srv/new-api/cn2-20260921/original-config/site/newapi-canvas-nav-f29ae12048c8",
+  "backup_directory": "/srv/new-api/cn2-20260921/canvas-navigation/20261003-013524"
+}

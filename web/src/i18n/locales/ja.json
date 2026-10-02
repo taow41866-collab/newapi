@@ -2999,6 +2999,7 @@
     "Inherit vendor icon": "プロバイダーのアイコンを継承",
     "Inherited": "継承",
     "Inherited from {{vendor}}": "{{vendor}} から継承",
+    "Infinite Canvas": "無限キャンバス",
     "Initial quota given to new users": "新規ユーザーに付与される初期クォータ",
     "Initial quota given to new users ({{formattedQuota}})": "新規ユーザーに付与される初期クォータ（{{formattedQuota}}）",
     "Initialization failed, please try again.": "初期化に失敗しました。もう一度お試しください。",
