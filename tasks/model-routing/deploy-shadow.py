@@ -101,7 +101,9 @@ def clone_application(source, name, connection, created_ids):
     # Match the proven prior release path: create on DB, then attach egress and
     # the internal routing network. Never import inspect-only Docker fields.
     config, host = source['Config'], source['HostConfig']
-    assert set(source['NetworkSettings']['Networks']) == {'new-api-cn2_database', 'new-api-cn2_egress'}
+    networks = set(source['NetworkSettings']['Networks'])
+    assert {'new-api-cn2_database', 'new-api-cn2_egress'} <= networks
+    assert networks <= {'new-api-cn2_database', 'new-api-cn2_egress', 'new-api-model-routing'}
     assert not host.get('PortBindings') and not host.get('Privileged')
     assert config['Entrypoint'] == ['/new-api']
     env = dict(item.split('=', 1) for item in config['Env'])

@@ -141,7 +141,11 @@ class ReleaseGuardTests(unittest.TestCase):
             'HostConfig': {'PortBindings': {}, 'Privileged': False, 'ReadonlyRootfs': True,
                            'CapDrop': ['ALL'], 'SecurityOpt': ['no-new-privileges:true'],
                            'Tmpfs': {'/tmp': 'rw,size=64m'}},
-            'NetworkSettings': {'Networks': {'new-api-cn2_database': {}, 'new-api-cn2_egress': {}}},
+            'NetworkSettings': {'Networks': {
+                'new-api-cn2_database': {},
+                'new-api-cn2_egress': {},
+                'new-api-model-routing': {},
+            }},
             'Mounts': [{'Type': 'bind', 'Source': '/srv/test-data', 'Destination': '/data', 'RW': True}],
         }
         captured_env = {}
