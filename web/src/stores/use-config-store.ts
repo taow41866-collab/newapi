@@ -4,6 +4,7 @@ import { persist } from "zustand/middleware";
 import { nanoid } from "nanoid";
 
 import i18n from "@/i18n";
+import { appendMissingVideoChannel32, channel32VideoChannel } from "@/lib/default-video-channel";
 
 export type ApiCallFormat = "openai" | "gemini";
 export type ModelCapability = "image" | "video" | "text" | "audio";
@@ -72,7 +73,7 @@ export type ChannelCredentialsImportResult = {
 
 export const CONFIG_STORE_KEY = "infinite-canvas:ai_config_store";
 const CHANNEL_MODEL_SEPARATOR = "::";
-const OPENAI_BASE_URL = "https://api.openai.com";
+const OPENAI_BASE_URL = import.meta.env.VITE_GATEWAY_URL || "https://api.openai.com";
 const GEMINI_BASE_URL = "https://generativelanguage.googleapis.com";
 export const LOCAL_PROXY_PACKAGE = "@basketikun/canvas-proxy";
 export const DEFAULT_LOCAL_PROXY_URL = "http://127.0.0.1:23210";
@@ -96,6 +97,7 @@ export const defaultConfig: AiConfig = {
                 { name: "gpt-4o-mini-tts", capability: "audio" },
             ],
         },
+        channel32VideoChannel,
     ],
     model: "default::gpt-image-2",
     imageModel: "default::gpt-image-2",
@@ -113,7 +115,7 @@ export const defaultConfig: AiConfig = {
     videoMode: "frames",
     systemPrompt: "",
     reasoningEffort: "auto",
-    models: ["default::gpt-image-2", "default::grok-imagine-video", "default::gpt-5.5", "default::gpt-4o-mini-tts"],
+    models: ["default::gpt-image-2", "default::grok-imagine-video", "default::gpt-5.5", "default::gpt-4o-mini-tts", ...channel32VideoChannel.models.map((model) => `${channel32VideoChannel.id}::${model.name}`)],
     quality: "auto",
     size: "1:1",
     background: "",
@@ -245,7 +247,7 @@ export const useConfigStore = create<ConfigStore>()(
                 const persistedWebdav = (persistedState.webdav || {}) as Partial<WebdavSyncConfig>;
                 const config = { ...defaultConfig, ...persistedConfig };
                 if (!Array.isArray(persistedConfig.channels)) config.channels = [];
-                const channels = normalizeChannels(config);
+                const channels = appendMissingVideoChannel32(normalizeChannels(config));
                 const models = modelOptionsFromChannels(channels);
                 return {
                     ...current,
