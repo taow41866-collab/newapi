@@ -68,5 +68,9 @@ export function buildChatCompletionPayload(
     payload.seed = config.seed
   }
 
+  if (config.reasoning_effort !== null) {
+    payload.reasoning_effort = config.reasoning_effort
+  }
+
   return payload
 }

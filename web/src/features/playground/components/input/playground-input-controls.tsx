@@ -24,18 +24,24 @@ import { PromptInputButton } from '@/components/ai-elements/prompt-input'
 import { ModelGroupSelector } from '@/components/model-group-selector'
 
 import { getInputControlState } from '../../lib'
-import type { GroupOption, ModelOption } from '../../types'
+import type { GroupOption, ModelOption, PlaygroundConfig } from '../../types'
+import { ReasoningEffortControl } from './reasoning-effort-control'
 
 type PlaygroundInputControlsProps = {
   disabled?: boolean
   groups: GroupOption[]
   groupValue: string
+  config: PlaygroundConfig
   isGenerating?: boolean
   isModelLoading?: boolean
   models: ModelOption[]
   modelValue: string
   onGroupChange: (value: string) => void
   onModelChange: (value: string) => void
+  onConfigChange: <K extends keyof PlaygroundConfig>(
+    key: K,
+    value: PlaygroundConfig[K]
+  ) => void
   onStop?: () => void
   text: string
   tools: ReactNode
@@ -45,12 +51,14 @@ export function PlaygroundInputControls({
   disabled,
   groups,
   groupValue,
+  config,
   isGenerating,
   isModelLoading = false,
   models,
   modelValue,
   onGroupChange,
   onModelChange,
+  onConfigChange,
   onStop,
   text,
   tools,
@@ -68,15 +76,22 @@ export function PlaygroundInputControls({
     })
 
   const renderSelector = () => (
-    <ModelGroupSelector
-      selectedModel={modelValue}
-      models={models}
-      onModelChange={onModelChange}
-      selectedGroup={groupValue}
-      groups={groups}
-      onGroupChange={onGroupChange}
-      disabled={isSelectorDisabled}
-    />
+    <div className='flex min-w-0 items-center gap-1'>
+      <ModelGroupSelector
+        selectedModel={modelValue}
+        models={models}
+        onModelChange={onModelChange}
+        selectedGroup={groupValue}
+        groups={groups}
+        onGroupChange={onGroupChange}
+        disabled={isSelectorDisabled}
+      />
+      <ReasoningEffortControl
+        disabled={isSelectorDisabled}
+        onChange={(value) => onConfigChange('reasoning_effort', value)}
+        value={config.reasoning_effort}
+      />
+    </div>
   )
 
   const renderSubmitButton = () =>

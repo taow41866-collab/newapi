@@ -12,10 +12,14 @@ REVISION = 'a' * 40
 IMAGE = 'ghcr.io/taow41866-collab/new-api@sha256:' + 'b' * 64
 
 
-def load_script():
+def load_script(old_names=None):
     spec = importlib.util.spec_from_file_location('deploy_shadow_tested', SCRIPT)
     module = importlib.util.module_from_spec(spec)
-    with mock.patch.object(sys, 'argv', [str(SCRIPT), 'stage', IMAGE, REVISION]):
+    args = [str(SCRIPT), 'stage', IMAGE, REVISION, *(old_names or [
+        'new-api-modelroute-a5a347f1-master',
+        'new-api-modelroute-a5a347f1-slave',
+    ])]
+    with mock.patch.object(sys, 'argv', args):
         spec.loader.exec_module(module)
     return module
 
@@ -29,6 +33,17 @@ class ReleaseGuardTests(unittest.TestCase):
             'new_nodes': [{'id': 'new-master', 'image': 'new-image'},
                           {'id': 'new-slave', 'image': 'new-image'}],
         }
+
+    def test_release_uses_explicit_current_application_containers(self):
+        release = load_script([
+            'new-api-modelroute-a5a347f1-master',
+            'new-api-modelroute-a5a347f1-slave',
+        ])
+
+        self.assertEqual(release.old_names, [
+            'new-api-modelroute-a5a347f1-master',
+            'new-api-modelroute-a5a347f1-slave',
+        ])
 
     def nodes(self):
         old = [{'Name': '/' + name, 'Id': item['id'], 'Image': item['image'],

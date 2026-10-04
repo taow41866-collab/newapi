@@ -6853,6 +6853,15 @@
     "Zhipu": "Zhipu",
     "Zhipu GLM": "Zhipu GLM",
     "Zhipu V4": "Zhipu V4",
+    "Automatic": "Автоматически",
+    "Reasoning effort": "Интенсивность рассуждений",
+    "Adjust reasoning effort": "Настроить интенсивность рассуждений",
+    "Reset reasoning effort": "Сбросить интенсивность рассуждений",
+    "Light reasoning": "Лёгкое рассуждение",
+    "Minimal reasoning": "Минимальное рассуждение",
+    "Balanced reasoning": "Сбалансированное рассуждение",
+    "Heavy reasoning": "Глубокое рассуждение",
+    "Extra-high reasoning": "Очень глубокое рассуждение",
     "Zoom": "Zoom"
   }
 }

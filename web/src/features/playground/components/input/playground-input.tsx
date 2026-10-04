@@ -113,6 +113,7 @@ export function PlaygroundInput({
 
         <PromptInputFooter className='border-border/60 bg-muted/20 dark:bg-muted/10 border-t px-3 py-2.5 backdrop-blur'>
           <PlaygroundInputControls
+            config={config}
             disabled={disabled}
             groups={groups}
             groupValue={groupValue}
@@ -121,6 +122,7 @@ export function PlaygroundInput({
             models={models}
             modelValue={modelValue}
             onGroupChange={onGroupChange}
+            onConfigChange={onConfigChange}
             onModelChange={onModelChange}
             onStop={onStop}
             text={text}

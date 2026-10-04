@@ -33,6 +33,10 @@ export const playgroundConfigSchema = z.object({
   frequency_penalty: z.number().optional(),
   presence_penalty: z.number().optional(),
   seed: z.number().nullable().optional(),
+  reasoning_effort: z
+    .enum(['minimal', 'low', 'medium', 'high', 'xhigh'])
+    .nullable()
+    .optional(),
   stream: z.boolean().optional(),
 })
 

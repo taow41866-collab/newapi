@@ -6853,6 +6853,15 @@
     "Zhipu": "智譜",
     "Zhipu GLM": "智譜GLM",
     "Zhipu V4": "智譜 V4",
+    "Automatic": "自動",
+    "Reasoning effort": "推理強度",
+    "Adjust reasoning effort": "調整推理強度",
+    "Reset reasoning effort": "重設推理強度",
+    "Light reasoning": "輕度推理",
+    "Minimal reasoning": "最輕推理",
+    "Balanced reasoning": "標準推理",
+    "Heavy reasoning": "重度推理",
+    "Extra-high reasoning": "極高推理",
     "Zoom": "縮放"
   }
 }

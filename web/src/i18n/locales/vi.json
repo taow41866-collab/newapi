@@ -6853,6 +6853,15 @@
     "Zhipu": "Zhipu",
     "Zhipu GLM": "Zhipu GLM",
     "Zhipu V4": "Zhipu V4",
+    "Automatic": "Tự động",
+    "Reasoning effort": "Mức độ suy luận",
+    "Adjust reasoning effort": "Điều chỉnh mức độ suy luận",
+    "Reset reasoning effort": "Đặt lại mức độ suy luận",
+    "Light reasoning": "Suy luận nhẹ",
+    "Minimal reasoning": "Suy luận tối thiểu",
+    "Balanced reasoning": "Suy luận cân bằng",
+    "Heavy reasoning": "Suy luận chuyên sâu",
+    "Extra-high reasoning": "Suy luận rất chuyên sâu",
     "Zoom": "Zoom"
   }
 }

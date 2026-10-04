@@ -3,12 +3,14 @@ import argparse
 import json
 import subprocess
 import urllib.error
+import urllib.parse
 import urllib.request
 
 parser = argparse.ArgumentParser()
 parser.add_argument('action', choices=['status', 'dispatch', 'run'])
 parser.add_argument('--sha')
 parser.add_argument('--workflow', default='ci.yml')
+parser.add_argument('--ref', default='color-fix-staging')
 parser.add_argument('--run-id')
 args = parser.parse_args()
 credential = subprocess.run(['git', 'credential', 'fill'], input='protocol=https\nhost=github.com\n\n',
@@ -20,11 +22,11 @@ secret = fields.get('password')
 if not secret:
     raise SystemExit('Existing credential helper returned no usable credential.')
 base = 'https://api.github.com/repos/taow41866-collab/newapi'
-path = '/actions/workflows/' + args.workflow + '/runs?per_page=10&branch=color-fix-staging'
+path = '/actions/workflows/' + args.workflow + '/runs?per_page=10&branch=' + urllib.parse.quote(args.ref, safe='')
 data = None
 if args.action == 'dispatch':
     path = '/actions/workflows/' + args.workflow + '/dispatches'
-    data = json.dumps({'ref': 'color-fix-staging'}).encode()
+    data = json.dumps({'ref': args.ref}).encode()
 elif args.action == 'run':
     if not args.run_id or not args.run_id.isdigit():
         raise SystemExit('--run-id required')
@@ -36,7 +38,7 @@ try:
     with urllib.request.urlopen(request, timeout=30) as response:
         body = response.read()
         if not body:
-            print(json.dumps({'status': response.status, 'workflow': args.workflow, 'branch': 'color-fix-staging'}))
+            print(json.dumps({'status': response.status, 'workflow': args.workflow, 'branch': args.ref}))
         else:
             payload = json.loads(body)
             rows = payload.get('workflow_runs', [payload])

@@ -1,6 +1,7 @@
 """Controlled shadow release. Keeps old applications, images and the live ledger.
 
 Run on the authorized production host with action, immutable image and revision.
+Optionally pass the current master and slave container names in that order.
 No secret is printed; private snapshots and backups are root-readable only.
 """
 import datetime
@@ -22,10 +23,15 @@ os.umask(0o077)
 if sys.flags.optimize:
     raise RuntimeError('Release guardrails require normal Python mode; do not use -O or PYTHONOPTIMIZE')
 action, image, revision = sys.argv[1:4]
+old_names = sys.argv[4:6]
+assert len(old_names) == 2 and len(sys.argv[4:]) == 2, \
+    'Pass both current application container names in master, slave order'
+assert old_names[0].endswith('-master') and old_names[1].endswith('-slave'), \
+    'Current containers must be supplied in master, slave order'
+assert old_names[0] != old_names[1]
 assert re.fullmatch(r'[0-9a-f]{40}', revision)
 assert re.fullmatch(r'ghcr.io/taow41866-collab/new-api@sha256:[0-9a-f]{64}', image)
 root = pathlib.Path('/srv/new-api/releases/model-route-' + revision[:12])
-old_names = ['new-api-probe-49ee6e6-master', 'new-api-probe-49ee6e6-slave']
 new_names = ['new-api-modelroute-' + revision[:8] + '-' + role for role in ['master', 'slave']]
 auth_names = ['new-api-email-a', 'new-api-email-b']
 db = 'new_api_production_20260921'
