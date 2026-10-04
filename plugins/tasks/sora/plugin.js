@@ -10,7 +10,7 @@ export const meta = {
   version: "1.1.0",
   channelTypes: [55, 1], // OpenAI-type channels natively serve sora with the same wire format
   author: { name: "QuantumNous" },
-  models: ["sora-2", "sora-2-pro"],
+  models: ["sora-2", "sora-2-pro", "SD2.5特价900-线路四"],
   fetchMode: "per_task",
   // A New API gateway serves /v1/videos as a host protocol, so no URL changes.
   upstreams: ["vendor", "new_api"],
@@ -268,7 +268,7 @@ protocols.openai_video = {
       return {
         kind: "submit",
         model: ctx.model,
-        action: req.input_reference || req.image ? "image_to_video" : "text_to_video",
+        action: req.input_reference || req.image || (Array.isArray(req.images) && req.images.length > 0) || req.first_frame_image || req.last_frame_image ? "image_to_video" : "text_to_video",
         requestBody: Object.assign({}, req, { model: ctx.model }),
       };
     }
