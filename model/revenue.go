@@ -51,6 +51,10 @@ func ValidatePurchasePrices(rules []PurchasePrice) error {
 			if r.InputPrice == nil || r.OutputPrice == nil {
 				return errors.New("input/output prices per million tokens are required")
 			}
+		case "model_multiplier":
+			if r.UnitPrice == nil {
+				return errors.New("model cost multiplier is required")
+			}
 		case "request", "image", "second":
 			if r.UnitPrice == nil {
 				return errors.New("unit price is required")
@@ -77,28 +81,32 @@ func GetPurchasePriceRules(ctx context.Context) ([]PurchasePrice, error) {
 }
 
 type RevenueRow struct {
-	ChannelID        int      `json:"channel_id"`
-	Model            string   `json:"model"`
-	Entries          int64    `json:"entries"`
-	Sales            float64  `json:"sales"`
-	Refunds          float64  `json:"refunds"`
-	NetSales         float64  `json:"net_sales"`
-	KnownCost        float64  `json:"known_cost"`
-	Cost             *float64 `json:"cost"`
-	GrossProfit      *float64 `json:"gross_profit"`
-	UncoveredEntries int64    `json:"uncovered_entries"`
-	PendingEntries   int64    `json:"pending_entries"`
+	ChannelID            int      `json:"channel_id"`
+	Model                string   `json:"model"`
+	Entries              int64    `json:"entries"`
+	Sales                float64  `json:"sales"`
+	Refunds              float64  `json:"refunds"`
+	NetSales             float64  `json:"net_sales"`
+	KnownCost            float64  `json:"known_cost"`
+	EstimatedCostEntries int64    `json:"estimated_cost_entries"`
+	Cost                 *float64 `json:"cost"`
+	GrossProfit          *float64 `json:"gross_profit"`
+	GrossMarginRate      *float64 `json:"gross_margin_rate"`
+	UncoveredEntries     int64    `json:"uncovered_entries"`
+	PendingEntries       int64    `json:"pending_entries"`
 }
 type RevenueReport struct {
-	Rows             []RevenueRow `json:"rows"`
-	Sales            float64      `json:"sales"`
-	Refunds          float64      `json:"refunds"`
-	NetSales         float64      `json:"net_sales"`
-	KnownCost        float64      `json:"known_cost"`
-	GrossProfit      *float64     `json:"gross_profit"`
-	UncoveredEntries int64        `json:"uncovered_entries"`
-	PendingEntries   int64        `json:"pending_entries"`
-	LogEnabled       bool         `json:"log_enabled"`
+	Rows                 []RevenueRow `json:"rows"`
+	Sales                float64      `json:"sales"`
+	Refunds              float64      `json:"refunds"`
+	NetSales             float64      `json:"net_sales"`
+	KnownCost            float64      `json:"known_cost"`
+	EstimatedCostEntries int64        `json:"estimated_cost_entries"`
+	GrossProfit          *float64     `json:"gross_profit"`
+	GrossMarginRate      *float64     `json:"gross_margin_rate"`
+	UncoveredEntries     int64        `json:"uncovered_entries"`
+	PendingEntries       int64        `json:"pending_entries"`
+	LogEnabled           bool         `json:"log_enabled"`
 }
 
 type revenueMetadata struct {
@@ -108,6 +116,13 @@ type revenueMetadata struct {
 	ImageCount       *float64           `json:"image_count"`
 	CacheTokens      float64            `json:"cache_tokens"`
 	CacheWriteTokens float64            `json:"cache_creation_tokens"`
+	ModelPrice       float64            `json:"model_price"`
+	ModelRatio       *float64           `json:"model_ratio"`
+	CompletionRatio  *float64           `json:"completion_ratio"`
+	BillingMode      string             `json:"billing_mode"`
+	Audio            bool               `json:"audio"`
+	Image            bool               `json:"image"`
+	WebSocket        bool               `json:"ws"`
 	UsageFacts       map[string]float64 `json:"usage_facts"`
 }
 
@@ -179,18 +194,15 @@ func CalculateRevenue(logs []Log, rules []PurchasePrice, tasks map[string]Task, 
 			}
 		}
 		row.Entries++
-		var rule *PurchasePrice
-		for i := range rules {
-			r := &rules[i]
-			if r.ChannelID == l.ChannelId && r.Model == l.ModelName && r.EffectiveAt <= l.CreatedAt && (rule == nil || r.EffectiveAt > rule.EffectiveAt) {
-				rule = r
-			}
-		}
-		cost, ok := purchaseCost(l, meta, rule)
+		rule := findPurchasePriceRule(rules, l.ChannelId, l.ModelName, l.CreatedAt)
+		cost, ok := purchaseCost(l, meta, rule, quotaPerUnit)
 		if !ok {
 			row.UncoveredEntries++
 		} else {
 			row.KnownCost += cost
+			if rule.Unit == "model_multiplier" {
+				row.EstimatedCostEntries++
+			}
 		}
 	}
 	for _, row := range rows {
@@ -200,11 +212,16 @@ func CalculateRevenue(logs []Log, rules []PurchasePrice, tasks map[string]Task, 
 			profit := row.NetSales - cost
 			row.Cost = &cost
 			row.GrossProfit = &profit
+			if row.NetSales > 0 {
+				marginRate := profit / row.NetSales
+				row.GrossMarginRate = &marginRate
+			}
 		}
 		report.Rows = append(report.Rows, *row)
 		report.Sales += row.Sales
 		report.Refunds += row.Refunds
 		report.KnownCost += row.KnownCost
+		report.EstimatedCostEntries += row.EstimatedCostEntries
 		report.UncoveredEntries += row.UncoveredEntries
 		report.PendingEntries += row.PendingEntries
 	}
@@ -212,6 +229,10 @@ func CalculateRevenue(logs []Log, rules []PurchasePrice, tasks map[string]Task, 
 	if report.UncoveredEntries == 0 {
 		profit := report.NetSales - report.KnownCost
 		report.GrossProfit = &profit
+		if report.NetSales > 0 {
+			marginRate := profit / report.NetSales
+			report.GrossMarginRate = &marginRate
+		}
 	}
 	sort.Slice(report.Rows, func(i, j int) bool {
 		if report.Rows[i].ChannelID != report.Rows[j].ChannelID {
@@ -222,7 +243,28 @@ func CalculateRevenue(logs []Log, rules []PurchasePrice, tasks map[string]Task, 
 	return report
 }
 
-func purchaseCost(l Log, m revenueMetadata, r *PurchasePrice) (float64, bool) {
+func findPurchasePriceRule(rules []PurchasePrice, channelID int, modelName string, createdAt int64) *PurchasePrice {
+	var exact, estimate *PurchasePrice
+	for i := range rules {
+		rule := &rules[i]
+		if rule.ChannelID != channelID || rule.Model != modelName || rule.EffectiveAt > createdAt {
+			continue
+		}
+		if rule.Unit == "model_multiplier" {
+			if estimate == nil || rule.EffectiveAt > estimate.EffectiveAt {
+				estimate = rule
+			}
+		} else if exact == nil || rule.EffectiveAt > exact.EffectiveAt {
+			exact = rule
+		}
+	}
+	if exact != nil {
+		return exact
+	}
+	return estimate
+}
+
+func purchaseCost(l Log, m revenueMetadata, r *PurchasePrice, quotaPerUnit float64) (float64, bool) {
 	if r == nil {
 		return 0, false
 	}
@@ -272,6 +314,15 @@ func purchaseCost(l Log, m revenueMetadata, r *PurchasePrice) (float64, bool) {
 			return 0, false
 		}
 		cost += (input**r.InputPrice + output**r.OutputPrice) / 1e6
+	case "model_multiplier":
+		if r.UnitPrice == nil || m.ModelRatio == nil || m.CompletionRatio == nil || m.BillingMode != "" || m.ModelPrice > 0 || m.IsTask || m.Audio || m.Image || m.WebSocket || m.ImageCount != nil || len(m.UsageFacts) > 0 || m.CacheTokens != 0 || m.CacheWriteTokens != 0 {
+			return 0, false
+		}
+		if l.PromptTokens <= 0 || l.CompletionTokens < 0 || *m.ModelRatio <= 0 || math.IsNaN(*m.ModelRatio) || math.IsInf(*m.ModelRatio, 0) || *m.CompletionRatio < 0 || math.IsNaN(*m.CompletionRatio) || math.IsInf(*m.CompletionRatio, 0) || quotaPerUnit <= 0 {
+			return 0, false
+		}
+		baseModelCost := (float64(l.PromptTokens)*(*m.ModelRatio) + float64(l.CompletionTokens)*(*m.ModelRatio)*(*m.CompletionRatio)) / quotaPerUnit
+		cost = baseModelCost * *r.UnitPrice
 	default:
 		return 0, false
 	}

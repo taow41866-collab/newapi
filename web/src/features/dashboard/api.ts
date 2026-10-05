@@ -31,20 +31,24 @@ export interface RevenueRow {
   net_sales: number
   cost?: number | null
   gross_profit?: number | null
+  gross_margin_rate?: number | null
   pending_entries: number
+  estimated_cost_entries?: number
 }
 export interface RevenueReport {
   rows: RevenueRow[]
   net_sales: number
   known_cost: number
+  estimated_cost_entries?: number
   gross_profit?: number | null
+  gross_margin_rate?: number | null
   uncovered_entries: number
 }
 
 export interface PurchasePriceRule {
   channel_id: number
   model: string
-  unit: 'tokens' | 'request' | 'image' | 'second'
+  unit: 'tokens' | 'request' | 'image' | 'second' | 'model_multiplier'
   unit_price?: number
   input_price?: number
   output_price?: number

@@ -66,6 +66,84 @@ func TestValidateRevenuePricesRejectsInvalidAmountsAndMissingSource(t *testing.T
 	assert.Error(t, model.ValidatePurchasePrices([]model.PurchasePrice{invalid}))
 }
 
+func TestCalculateRevenueEstimatesCostFromModelMultiplier(t *testing.T) {
+	logs := []model.Log{{
+		CreatedAt: 100, Type: model.LogTypeConsume, ChannelId: 7, ModelName: "gpt-test", UserId: 1,
+		Quota: 2000, PromptTokens: 1000, CompletionTokens: 500,
+		Other: `{"model_ratio":1,"completion_ratio":3}`,
+	}}
+	rules := []model.PurchasePrice{{ChannelID: 7, Model: "gpt-test", EffectiveAt: 0, Unit: "model_multiplier", UnitPrice: ptr(0.25), Source: "cost estimate"}}
+
+	report := model.CalculateRevenue(logs, rules, nil, 1000)
+
+	// Base model cost is (1000 input + 500*3 output) / 1000, then * 25%.
+	assert.InDelta(t, 0.625, report.KnownCost, 1e-10)
+	assert.Equal(t, int64(1), report.EstimatedCostEntries)
+	require.NotNil(t, report.GrossProfit)
+	assert.InDelta(t, 1.375, *report.GrossProfit, 1e-10)
+	require.NotNil(t, report.GrossMarginRate)
+	assert.InDelta(t, 0.6875, *report.GrossMarginRate, 1e-10)
+	require.NotNil(t, report.Rows[0].GrossMarginRate)
+	assert.InDelta(t, 0.6875, *report.Rows[0].GrossMarginRate, 1e-10)
+}
+
+func TestCalculateRevenueLeavesGrossMarginUnknownWithoutPositiveSales(t *testing.T) {
+	logs := []model.Log{
+		{CreatedAt: 100, Type: model.LogTypeConsume, ChannelId: 7, ModelName: "gpt-test", Quota: 1000},
+		{CreatedAt: 101, Type: model.LogTypeRefund, ChannelId: 7, ModelName: "gpt-test", Quota: 1000},
+	}
+	rules := []model.PurchasePrice{{ChannelID: 7, Model: "gpt-test", EffectiveAt: 0, Unit: "request", UnitPrice: ptr(0.25), Source: "invoice"}}
+
+	report := model.CalculateRevenue(logs, rules, nil, 1000)
+
+	require.NotNil(t, report.GrossProfit)
+	assert.Nil(t, report.GrossMarginRate)
+	require.Len(t, report.Rows, 1)
+	assert.Nil(t, report.Rows[0].GrossMarginRate)
+}
+
+func TestCalculateRevenueKeepsMultiplierUnknownForUnsupportedUsage(t *testing.T) {
+	cases := []struct {
+		name string
+		log  model.Log
+	}{
+		{name: "missing model snapshot", log: model.Log{PromptTokens: 1000, CompletionTokens: 500}},
+		{name: "missing completion ratio snapshot", log: model.Log{PromptTokens: 1000, CompletionTokens: 500, Other: `{"model_ratio":1}`}},
+		{name: "cached usage needs exact rates", log: model.Log{PromptTokens: 1000, Other: `{"model_ratio":1,"completion_ratio":1,"cache_tokens":100}`}},
+		{name: "tiered billing", log: model.Log{PromptTokens: 1000, Other: `{"model_ratio":1,"completion_ratio":1,"billing_mode":"tiered_expr"}`}},
+		{name: "media usage", log: model.Log{PromptTokens: 1000, Other: `{"model_ratio":1,"completion_ratio":1,"image":true}`}},
+		{name: "async task", log: model.Log{PromptTokens: 1000, Other: `{"model_ratio":1,"completion_ratio":1,"is_task":true}`}},
+		{name: "fixed model price", log: model.Log{PromptTokens: 1000, Other: `{"model_ratio":1,"completion_ratio":1,"model_price":0.04}`}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tc.log.CreatedAt, tc.log.Type, tc.log.ChannelId, tc.log.ModelName, tc.log.UserId, tc.log.Quota = 100, model.LogTypeConsume, 7, "gpt-test", 1, 1000
+			rules := []model.PurchasePrice{{ChannelID: 7, Model: "gpt-test", EffectiveAt: 0, Unit: "model_multiplier", UnitPrice: ptr(0.25), Source: "estimate"}}
+			report := model.CalculateRevenue([]model.Log{tc.log}, rules, nil, 1000)
+			assert.Equal(t, float64(0), report.KnownCost)
+			assert.Equal(t, int64(1), report.UncoveredEntries)
+			assert.Nil(t, report.GrossProfit)
+		})
+	}
+}
+
+func TestCalculateRevenuePrefersExactPurchasePriceToMultiplier(t *testing.T) {
+	log := model.Log{CreatedAt: 100, Type: model.LogTypeConsume, ChannelId: 7, ModelName: "gpt-test", UserId: 1, Quota: 2000, PromptTokens: 1000, CompletionTokens: 500, Other: `{"model_ratio":1,"completion_ratio":3}`}
+	rules := []model.PurchasePrice{
+		{ChannelID: 7, Model: "gpt-test", EffectiveAt: 0, Unit: "model_multiplier", UnitPrice: ptr(0.25), Source: "estimate"},
+		{ChannelID: 7, Model: "gpt-test", EffectiveAt: 0, Unit: "tokens", InputPrice: ptr(2), OutputPrice: ptr(4), Source: "invoice"},
+	}
+	// Distinct effective timestamps are required by validation, so the later
+	// exact quote is the active rule for this request.
+	rules[1].EffectiveAt = 50
+	require.NoError(t, model.ValidatePurchasePrices(rules))
+
+	report := model.CalculateRevenue([]model.Log{log}, rules, nil, 1000)
+
+	assert.InDelta(t, 0.004, report.KnownCost, 1e-10)
+	assert.Equal(t, int64(0), report.EstimatedCostEntries)
+}
+
 func TestGetRevenueReportReadsLogDBAndRejectsOversizedRange(t *testing.T) {
 	db := setupRevenueControllerTestDB(t)
 	require.NoError(t, db.Create(&[]model.Log{{CreatedAt: 100, Type: model.LogTypeConsume, ChannelId: 7, ModelName: "gpt-test", Quota: 1000}, {CreatedAt: 101, Type: model.LogTypeRefund, ChannelId: 7, ModelName: "gpt-test", Quota: 200}}).Error)
