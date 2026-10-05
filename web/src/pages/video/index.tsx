@@ -15,11 +15,12 @@ import { clampVideoSeconds } from "@/lib/media-size";
 import { formatBytes, formatDuration } from "@/lib/image-utils";
 import { deleteStoredMedia, resolveMediaUrl } from "@/services/file-storage";
 import { resolveImageUrl, ensureImagePreview, getImagePreviewRevision, previewUrlFor, subscribeImagePreviews, uploadImage } from "@/services/image-storage";
-import { createVideoGenerationTask, pollVideoGenerationTask, storeGeneratedVideo, type VideoGenerationTask } from "@/services/api/video";
+import { createVideoGenerationTask, isVideoTaskFailed, isVideoTaskRetryable, pollVideoGenerationTask, storeGeneratedVideo, type VideoGenerationTask } from "@/services/api/video";
 import { useAssetStore } from "@/stores/use-asset-store";
 import { useWorkbenchAgentStore } from "@/stores/use-workbench-agent-store";
 import { boolConfig, modelOptionLabel, useConfigStore, useEffectiveConfig, type AiConfig } from "@/stores/use-config-store";
 import { useThemeStore } from "@/stores/use-theme-store";
+import { retryVideoTask } from "./task-retry";
 import type { ReferenceImage } from "@/types/image";
 import i18n from "@/i18n";
 
@@ -39,6 +40,7 @@ type GenerationResult = {
     status: "pending" | "success" | "failed";
     video?: GeneratedVideo;
     error?: string;
+    retryable?: boolean;
 };
 
 type GenerationLog = {
@@ -58,6 +60,10 @@ type GenerationLog = {
     task?: VideoGenerationTask;
     video?: GeneratedVideo;
     error?: string;
+    retryable?: boolean;
+    progress?: number;
+    providerStatus?: string;
+    lastUpdatedAt?: number;
 };
 
 type GenerationLogConfig = Pick<AiConfig, "model" | "videoModel" | "size" | "vquality" | "videoSeconds" | "videoGenerateAudio" | "videoWatermark" | "videoMode">;
@@ -74,6 +80,10 @@ export default function VideoPage() {
     const fileInputRef = useRef<HTMLInputElement>(null);
     const dragDepthRef = useRef(0);
     const activeLogIdsRef = useRef<Set<string>>(new Set());
+    const retryingLogIdsRef = useRef<Set<string>>(new Set());
+    const pollAbortRef = useRef(new AbortController());
+    const submittingRef = useRef(false);
+    const previewLogRef = useRef<GenerationLog | null>(null);
     const config = useConfigStore((state) => state.config);
     const effectiveConfig = useEffectiveConfig();
     const updateConfig = useConfigStore((state) => state.updateConfig);
@@ -105,6 +115,11 @@ export default function VideoPage() {
     const model = effectiveConfig.videoModel || effectiveConfig.model;
     const canGenerate = Boolean(prompt.trim());
 
+    const setActivePreviewLog = (log: GenerationLog | null) => {
+        previewLogRef.current = log;
+        setPreviewLog(log);
+    };
+
     useEffect(() => {
         if (!running || !startedAt) return;
         const timer = window.setInterval(() => setElapsedMs(performance.now() - startedAt), 1000);
@@ -112,7 +127,9 @@ export default function VideoPage() {
     }, [running, startedAt]);
 
     useEffect(() => {
+        pollAbortRef.current = new AbortController();
         void refreshLogs();
+        return () => pollAbortRef.current.abort();
     }, []);
 
     const addReferences = async (files?: FileList | null) => {
@@ -168,33 +185,42 @@ export default function VideoPage() {
             message.error(t("videoWorkbench.clipboardEmpty"));
         }
     };
-    const generate = async () => {
+    const generate = async (original?: { text: string; config: AiConfig; references: ReferenceImage[] }) => {
+        if (submittingRef.current) return;
         const agentTaskId = agentTaskIdRef.current;
         agentTaskIdRef.current = undefined;
-        const snapshot = buildRequestSnapshot();
+        const snapshot = original || buildRequestSnapshot();
         if (!snapshot) {
             if (agentTaskId) updateAgentTask(agentTaskId, { status: "failed", error: t("videoWorkbench.invalidParams") });
             return;
         }
         setElapsedMs(0);
+        submittingRef.current = true;
         setRunning(true);
         if (agentTaskId) updateAgentTask(agentTaskId, { status: "running", error: undefined });
-        setPreviewLog(null);
+        setActivePreviewLog(null);
         setResults([{ id: nanoid(), status: "pending" }]);
         const batchStartedAt = performance.now();
         setStartedAt(batchStartedAt);
+        let submittedLog: GenerationLog | undefined;
         try {
             const task = await createVideoGenerationTask(snapshot.config, snapshot.text, snapshot.references);
-            const log = buildLog({ prompt: snapshot.text, model, config: snapshot.config, references: snapshot.references, durationMs: 0, status: "pending", task });
-            await saveLog(log, false);
+            const log = buildLog({ prompt: snapshot.text, model: task.model, config: snapshot.config, references: snapshot.references, durationMs: 0, status: "pending", task });
+            submittedLog = log;
+            setActivePreviewLog(log);
+            try { await saveLog(log, false); } catch { message.warning("任务已提交，但本地记录保存失败，请保留当前页面查询，勿重复生成。"); }
             void pollGenerationLog(log, snapshot.config, agentTaskId);
         } catch (error) {
+            if (submittedLog) return;
             const errorMessage = error instanceof Error ? error.message : t("workbench.generationFailed");
-            setResults([{ id: nanoid(), status: "failed", error: errorMessage }]);
+            const canRetry = isVideoTaskRetryable(error);
+            setResults([{ id: nanoid(), status: "failed", error: errorMessage, retryable: canRetry }]);
             if (agentTaskId) updateAgentTask(agentTaskId, { status: "failed", successCount: 0, failCount: 1, error: errorMessage });
-            await saveLog(buildLog({ prompt: snapshot.text, model, config: snapshot.config, references: snapshot.references, durationMs: performance.now() - batchStartedAt, status: "failed", error: errorMessage }));
+            try { await saveLog(buildLog({ prompt: snapshot.text, model: snapshot.config.model, config: snapshot.config, references: snapshot.references, durationMs: performance.now() - batchStartedAt, status: "failed", error: errorMessage, retryable: false }), false); } catch { /* The submission outcome remains unknown. */ }
             message.error(errorMessage);
             setRunning(false);
+        } finally {
+            submittingRef.current = false;
         }
     };
 
@@ -234,8 +260,62 @@ export default function VideoPage() {
         return { text, config: buildVideoConfig(effectiveConfig, model), references: [...references] };
     };
 
-    const retryResult = () => {
-        void generate();
+    const retryResult = async () => {
+        const log = previewLog;
+        if (!log?.task) {
+            message.warning("原任务状态未确认，不能重新生成。请先查看生成记录。");
+            return;
+        }
+        if (activeLogIdsRef.current.has(log.id)) {
+            message.info("正在查询原任务进度，不会重新生成或再次计费。");
+            return;
+        }
+        if (log && retryingLogIdsRef.current.has(log.id)) return;
+        if (log) retryingLogIdsRef.current.add(log.id);
+        if (log?.task) {
+            try {
+                await retryVideoTask({
+                query: () => pollVideoGenerationTask(buildVideoConfig({ ...effectiveConfig, ...log.config }, log.task!.model || log.model), log.task!),
+                synchronize: async (state) => {
+                    if (state.status === "completed") {
+                        const stored = await storeGeneratedVideo(state.result);
+                        const video: GeneratedVideo = {
+                            id: nanoid(),
+                            url: stored.url,
+                            storageKey: stored.storageKey,
+                            durationMs: Date.now() - log.createdAt,
+                            width: stored.width || 1280,
+                            height: stored.height || 720,
+                            bytes: stored.bytes,
+                            mimeType: stored.mimeType,
+                        };
+                        if (previewLogRef.current?.id === log.id) setResults([{ id: video.id, status: "success", video }]);
+                        await saveLog({ ...log, status: "success", durationMs: video.durationMs, video, error: undefined, lastUpdatedAt: Date.now() });
+                    } else if (state.status === "pending") {
+                        const nextLog = { ...log, status: "pending" as const, progress: state.progress, providerStatus: state.providerStatus, error: undefined, retryable: false, lastUpdatedAt: Date.now() };
+                        await saveLog(nextLog, false);
+                        if (previewLogRef.current?.id === log.id) setResults([{ id: log.id, status: "pending" }]);
+                        void pollGenerationLog(nextLog);
+                    } else {
+                        await saveLog({ ...log, status: "failed", error: state.error, retryable: state.retryable, lastUpdatedAt: Date.now() }, false);
+                        if (previewLogRef.current?.id === log.id) setResults([{ id: log.id, status: "failed", error: state.error, retryable: state.retryable }]);
+                    }
+                },
+                confirm: async () => {
+                    const confirmed = await new Promise<boolean>((resolve) => {
+                        Modal.confirm({ title: t("videoWorkbench.retry"), content: "原任务已明确失败，重新生成会再次计费，是否继续？", onOk: () => resolve(true), onCancel: () => resolve(false) });
+                    });
+                    return confirmed;
+                },
+                create: async () => generate({ text: log.prompt, config: buildVideoConfig({ ...effectiveConfig, ...log.config }, log.task!.model || log.model), references: [...(log.references || [])] }),
+                });
+            } catch (error) {
+                message.warning(error instanceof Error ? error.message : t("videoWorkbench.querying"));
+            } finally {
+                if (log) retryingLogIdsRef.current.delete(log.id);
+            }
+            return;
+        }
     };
 
     const downloadVideo = (video: GeneratedVideo) => {
@@ -272,7 +352,7 @@ export default function VideoPage() {
         setElapsedMs(0);
         setStartedAt(0);
         setSelectedLogIds([]);
-        setPreviewLog(null);
+        setActivePreviewLog(null);
     };
 
     const deleteSelectedLogs = () => {
@@ -282,7 +362,7 @@ export default function VideoPage() {
             .filter((key): key is string => Boolean(key));
         void Promise.all([deleteStoredMedia(mediaKeys), ...selectedLogIds.map((id) => logStore.removeItem(id))]).then(() => refreshLogs());
         if (previewLog && selectedLogIds.includes(previewLog.id)) {
-            setPreviewLog(null);
+            setActivePreviewLog(null);
             setResults([]);
         }
         setSelectedLogIds([]);
@@ -290,6 +370,7 @@ export default function VideoPage() {
     };
 
     const saveLog = async (log: GenerationLog, resumePending = true) => {
+        if (previewLogRef.current?.id === log.id) setActivePreviewLog(log);
         await logStore.setItem(log.id, serializeLog(log));
         await refreshLogs(resumePending);
     };
@@ -309,14 +390,28 @@ export default function VideoPage() {
 
     const pollGenerationLog = async (log: GenerationLog, configOverride?: AiConfig, agentTaskId?: string) => {
         if (!log.task || activeLogIdsRef.current.has(log.id)) return;
+        const task = log.task;
         activeLogIdsRef.current.add(log.id);
         setRunning(true);
         setStartedAt((value) => value || performance.now());
-        setResults((value) => (value.length ? value : [{ id: log.id, status: "pending" }]));
-        const taskConfig = buildVideoConfig({ ...effectiveConfig, ...log.config }, log.task.model || log.model);
+        if (previewLogRef.current?.id === log.id) setResults([{ id: log.id, status: "pending" }]);
+        const taskConfig = buildVideoConfig({ ...effectiveConfig, ...log.config }, task.model || log.model);
+        const signal = pollAbortRef.current.signal;
         try {
-            for (let attempt = 0; attempt < 120; attempt += 1) {
-                const state = await pollVideoGenerationTask(configOverride || taskConfig, log.task);
+            for (let attempt = 0; attempt < 120 && !signal.aborted; attempt += 1) {
+                let state;
+                try {
+                    state = await pollVideoGenerationTask(configOverride || taskConfig, task, { signal });
+                } catch (error) {
+                    if (signal.aborted) return;
+                    // A transient query failure must not turn a paid upstream task into a new billable request.
+                    const messageText = error instanceof Error ? error.message : t("videoWorkbench.querying");
+                    await saveLog({ ...log, status: "pending", retryable: false, error: messageText, lastUpdatedAt: Date.now() }, false);
+                    if (previewLogRef.current?.id === log.id) setResults([{ id: log.id, status: "pending" }]);
+                    await delay(2500);
+                    continue;
+                }
+                if (signal.aborted) return;
                 if (state.status === "completed") {
                     const stored = await storeGeneratedVideo(state.result);
                     const nextVideo: GeneratedVideo = {
@@ -329,21 +424,35 @@ export default function VideoPage() {
                         bytes: stored.bytes,
                         mimeType: stored.mimeType,
                     };
-                    setResults([{ id: nextVideo.id, status: "success", video: nextVideo }]);
+                    if (signal.aborted) return;
+                    if (previewLogRef.current?.id === log.id) setResults([{ id: nextVideo.id, status: "success", video: nextVideo }]);
                     if (agentTaskId) updateAgentTask(agentTaskId, { status: "succeeded", successCount: 1, failCount: 0, error: undefined });
-                    await saveLog({ ...log, status: "success", durationMs: nextVideo.durationMs, video: nextVideo, error: undefined });
+                    await saveLog({ ...log, status: "success", durationMs: nextVideo.durationMs, video: nextVideo, error: undefined, lastUpdatedAt: Date.now() });
                     message.success(t("videoWorkbench.generated"));
                     return;
                 }
-                if (state.status === "failed") throw new Error(state.error);
-                if (attempt === 119) throw new Error(t("videoWorkbench.timeout"));
+                if (state.status === "failed") {
+                    const error = new Error(state.error);
+                    error.name = "VideoTaskFailed";
+                    Object.defineProperty(error, "retryable", { value: state.retryable, enumerable: false });
+                    throw error;
+                }
+                const progress = state.progress;
+                const nextLog = { ...log, status: "pending" as const, retryable: false, progress, providerStatus: state.providerStatus, lastUpdatedAt: Date.now(), error: undefined };
+                log = nextLog;
+                await saveLog(nextLog, false);
+                if (previewLogRef.current?.id === log.id) setResults([{ id: log.id, status: "pending" }]);
                 await delay(2500);
             }
+            if (!signal.aborted) message.info("后台任务尚未结束，可在记录中继续查询进度，不会再次计费。");
         } catch (error) {
+            if (signal.aborted) return;
             const errorMessage = error instanceof Error ? error.message : t("workbench.generationFailed");
-            setResults([{ id: log.id, status: "failed", error: errorMessage }]);
+            const canRetry = isVideoTaskRetryable(error);
+            const confirmedFailure = isVideoTaskFailed(error);
+            if (previewLogRef.current?.id === log.id) setResults([{ id: log.id, status: confirmedFailure ? "failed" : "pending", error: errorMessage, retryable: canRetry }]);
             if (agentTaskId) updateAgentTask(agentTaskId, { status: "failed", successCount: 0, failCount: 1, error: errorMessage });
-            await saveLog({ ...log, status: "failed", durationMs: Date.now() - log.createdAt, error: errorMessage });
+            try { await saveLog({ ...log, status: confirmedFailure ? "failed" : "pending", durationMs: Date.now() - log.createdAt, error: errorMessage, retryable: canRetry, lastUpdatedAt: Date.now() }, false); } catch { message.warning("本地记录保存失败，原任务仍可通过当前页面查询，请勿重复生成。"); }
             message.error(errorMessage);
         } finally {
             activeLogIdsRef.current.delete(log.id);
@@ -355,7 +464,7 @@ export default function VideoPage() {
     };
 
     const previewGenerationLog = (log: GenerationLog) => {
-        setPreviewLog(log);
+        setActivePreviewLog(log);
         setLogsOpen(false);
         setPrompt(log.prompt);
         setReferences(log.references || []);
@@ -366,7 +475,7 @@ export default function VideoPage() {
         if (log.config.videoGenerateAudio) updateConfig("videoGenerateAudio", log.config.videoGenerateAudio);
         if (log.config.videoWatermark) updateConfig("videoWatermark", log.config.videoWatermark);
         if (log.config.videoMode) updateConfig("videoMode", log.config.videoMode);
-        setResults(log.status === "pending" ? [{ id: log.id, status: "pending" }] : log.video ? [{ id: log.video.id, status: "success", video: log.video }] : [{ id: log.id, status: "failed", error: log.error || t("workbench.generationFailed") }]);
+        setResults(log.status === "pending" ? [{ id: log.id, status: "pending" }] : log.video ? [{ id: log.video.id, status: "success", video: log.video }] : [{ id: log.id, status: "failed", error: log.error || t("workbench.generationFailed"), retryable: log.retryable !== false }]);
     };
 
     return (
@@ -470,7 +579,7 @@ export default function VideoPage() {
                         </div>
                         {results.length ? (
                             <div className="grid gap-4">
-                                {results.map((result) => (result.status === "success" && result.video ? <ResultVideoCard key={result.id} video={result.video} onDownload={downloadVideo} onSaveAsset={saveResultToAssets} /> : result.status === "failed" ? <FailedVideoCard key={result.id} error={result.error || t("workbench.generationFailed")} onRetry={retryResult} /> : <PendingVideoCard key={result.id} />))}
+                                {results.map((result) => (result.status === "success" && result.video ? <ResultVideoCard key={result.id} video={result.video} onDownload={downloadVideo} onSaveAsset={saveResultToAssets} /> : result.status === "failed" ? <FailedVideoCard key={result.id} error={result.error || t("workbench.generationFailed")} onRetry={retryResult} retryable={result.retryable === true} /> : <PendingVideoCard key={result.id} progress={previewLog?.progress} providerStatus={previewLog?.providerStatus} onQuery={retryResult} />))}
                             </div>
                         ) : (
                             <div className="flex min-h-[320px] flex-col items-center justify-center rounded-lg border border-dashed border-stone-300 text-center dark:border-stone-700 lg:min-h-[560px]">
@@ -552,19 +661,21 @@ function ResultVideoCard({ video, onDownload, onSaveAsset }: { video: GeneratedV
     );
 }
 
-function PendingVideoCard() {
+function PendingVideoCard({ progress, providerStatus, onQuery }: { progress?: number; providerStatus?: string; onQuery: () => void }) {
     const { t } = useTranslation();
     return (
         <div className="relative aspect-video overflow-hidden rounded-lg border border-dashed border-stone-300 bg-stone-50 dark:border-stone-700 dark:bg-stone-900">
             <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-sm text-stone-500 dark:text-stone-400">
                 <LoaderCircle className="size-6 animate-spin" />
                 <span>{t("workbench.generating")}</span>
+                <span>{typeof progress === "number" && Number.isFinite(progress) ? `${Math.round(Math.max(0, Math.min(100, progress)))}%` : "进度待上游更新"}{providerStatus ? ` · ${providerStatus}` : ""}</span>
+                <Button size="small" onClick={onQuery}>查询进度（不收费）</Button>
             </div>
         </div>
     );
 }
 
-function FailedVideoCard({ error, onRetry }: { error: string; onRetry: () => void }) {
+function FailedVideoCard({ error, onRetry, retryable }: { error: string; onRetry: () => void; retryable: boolean }) {
     const { t } = useTranslation();
     return (
         <div className="overflow-hidden rounded-lg border border-red-200 bg-red-50 dark:border-red-950 dark:bg-red-950/20">
@@ -575,9 +686,7 @@ function FailedVideoCard({ error, onRetry }: { error: string; onRetry: () => voi
                 </Typography.Paragraph>
             </div>
             <div className="flex justify-end border-t border-red-200 p-3 dark:border-red-950">
-                <Button size="small" danger onClick={onRetry}>
-                    {t("workbench.retry")}
-                </Button>
+                <Button size="small" danger={retryable} onClick={onRetry}>{retryable ? t("workbench.retry") : "查询原任务（不收费）"}</Button>
             </div>
         </div>
     );
@@ -649,6 +758,7 @@ function LogCard({ log, selected, active, onSelectedChange, onClick }: { log: Ge
                     <Tag className="m-0 flex h-6 items-center rounded-md px-1.5 text-xs leading-none" color={log.status === "success" ? "blue" : log.status === "pending" ? "processing" : "red"}>
                         {t(`workbench.${log.status === "success" ? "success" : log.status === "pending" ? "generating" : "failed"}`)}
                     </Tag>
+                    {log.status === "pending" && typeof log.progress === "number" ? <span className="text-xs text-stone-500">{Math.round(log.progress)}%</span> : null}
                     <Tag className="m-0 flex h-6 items-center rounded-md px-1.5 text-xs leading-none" color="green">
                         {formatDuration(log.durationMs)}
                     </Tag>
@@ -697,6 +807,10 @@ async function normalizeLog(log: Partial<GenerationLog>): Promise<GenerationLog>
         task: log.task,
         video,
         error: log.error,
+        retryable: log.retryable,
+        progress: typeof log.progress === "number" ? log.progress : undefined,
+        providerStatus: log.providerStatus,
+        lastUpdatedAt: log.lastUpdatedAt || log.createdAt || Date.now(),
     };
 }
 
@@ -705,6 +819,7 @@ function serializeLog(log: GenerationLog): GenerationLog {
         ...log,
         references: log.references.map((item) => ({ ...item, dataUrl: item.storageKey ? "" : item.dataUrl })),
         video: log.video?.storageKey ? { ...log.video, url: "" } : log.video,
+        lastUpdatedAt: log.lastUpdatedAt || Date.now(),
     };
 }
 
@@ -739,7 +854,7 @@ function normalizeLogConfig(log: Partial<GenerationLog>): GenerationLogConfig {
     };
 }
 
-function buildLog({ prompt, model, config, references, durationMs, status, task, video, error }: { prompt: string; model: string; config: AiConfig; references: ReferenceImage[]; durationMs: number; status: GenerationLog["status"]; task?: VideoGenerationTask; video?: GeneratedVideo; error?: string }): GenerationLog {
+function buildLog({ prompt, model, config, references, durationMs, status, task, video, error, retryable }: { prompt: string; model: string; config: AiConfig; references: ReferenceImage[]; durationMs: number; status: GenerationLog["status"]; task?: VideoGenerationTask; video?: GeneratedVideo; error?: string; retryable?: boolean }): GenerationLog {
     const logConfig = {
         model: config.model,
         videoModel: config.videoModel,
@@ -767,6 +882,8 @@ function buildLog({ prompt, model, config, references, durationMs, status, task,
         task,
         video,
         error,
+        retryable,
+        lastUpdatedAt: Date.now(),
     };
 }
 

@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 
 import { appendMissingVideoChannel32, channel32VideoChannel } from "../src/lib/default-video-channel";
+import { buildSd25VideoRequest } from "../src/lib/sd25-video-request";
 
 test("adds New API channel 32 as a selectable video channel without credentials", () => {
     expect(channel32VideoChannel).toMatchObject({
@@ -50,4 +51,66 @@ test("merges missing video models into an existing endpoint without replacing cr
     expect(merged.baseUrl).toBe(configuredChannel.baseUrl);
     expect(merged.apiKey).toBe("user-key");
     expect(merged.models).toEqual([...configuredChannel.models, ...channel32VideoChannel.models.slice(1)]);
+});
+
+test("builds the documented SD2.5 request with public frame URLs and fixed 720p", () => {
+    expect(
+        buildSd25VideoRequest({
+            model: "SD2.5特价900-线路四",
+            prompt: "a cat running",
+            references: [
+                { id: "first", name: "first.png", type: "image/png", dataUrl: "data:image/png;base64,AA==", url: "https://cdn.example/first.png" },
+                { id: "last", name: "last.png", type: "image/png", dataUrl: "data:image/png;base64,AA==", url: "https://cdn.example/last.png" },
+            ],
+            mode: "frames",
+            seconds: "25",
+            aspectRatio: "16:9",
+            watermark: false,
+        }),
+    ).toEqual({
+        model: "SD2.5特价900-线路四",
+        prompt: "a cat running",
+        seconds: 25,
+        resolution: "720p",
+        aspect_ratio: "16:9",
+        first_frame_image: "https://cdn.example/first.png",
+        last_frame_image: "https://cdn.example/last.png",
+        watermark: false,
+    });
+});
+
+test("rejects local-only SD2.5 reference images", () => {
+    expect(() =>
+        buildSd25VideoRequest({
+            model: "SD2.5特价900-线路四",
+            prompt: "a cat running",
+            references: [{ id: "local", name: "local.png", type: "image/png", dataUrl: "data:image/png;base64,AA==", url: "blob:local-image" }],
+            mode: "frames",
+            seconds: "8",
+            aspectRatio: "16:9",
+            watermark: false,
+        }),
+    ).toThrow("公网 HTTP(S) URL");
+});
+
+test("uses the documented image-reference array for reference mode", () => {
+    expect(
+        buildSd25VideoRequest({
+            model: "SD2.5特价900-线路四",
+            prompt: "a cat running",
+            references: [{ id: "ref", name: "ref.png", type: "image/png", dataUrl: "", url: "https://cdn.example/ref.png" }],
+            mode: "reference",
+            seconds: "8",
+            aspectRatio: "9:16",
+            watermark: true,
+        }),
+    ).toEqual({
+        model: "SD2.5特价900-线路四",
+        prompt: "a cat running",
+        seconds: 8,
+        resolution: "720p",
+        aspect_ratio: "9:16",
+        watermark: true,
+        images: ["https://cdn.example/ref.png"],
+    });
 });
