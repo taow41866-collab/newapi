@@ -14,6 +14,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	appdto "github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
@@ -150,6 +151,73 @@ func TestCustomerChannelDiscountRetryWalletAccounting(t *testing.T) {
 			assert.NotContains(t, visible[0].Other, `"channel_id"`, "user logs must not disclose the selected upstream channel")
 		})
 	}
+}
+
+func TestCustomerChannelDiscountBalanceGateUsesControllerSelectedChannel(t *testing.T) {
+	previousDB := model.DB
+	db := setupRevenueControllerTestDB(t)
+	previousCache, previousRedis := common.MemoryCacheEnabled, common.RedisEnabled
+	previousBatch, previousConsume := common.BatchUpdateEnabled, common.LogConsumeEnabled
+	common.MemoryCacheEnabled, common.RedisEnabled = true, false
+	common.BatchUpdateEnabled, common.LogConsumeEnabled = false, false
+	t.Cleanup(func() {
+		common.MemoryCacheEnabled, common.RedisEnabled = previousCache, previousRedis
+		common.BatchUpdateEnabled, common.LogConsumeEnabled = previousBatch, previousConsume
+		model.DB = previousDB
+		model.InitChannelCache()
+	})
+	require.NoError(t, db.AutoMigrate(&model.User{}, &model.Token{}, &model.Channel{}, &model.Ability{}))
+	user := model.User{Username: "discount-balance-gate", Quota: 700, Status: common.UserStatusEnabled}
+	require.NoError(t, db.Create(&user).Error)
+	token := model.Token{UserId: user.Id, Key: "discount-balance-gate-test", RemainQuota: 700, Status: common.TokenStatusEnabled}
+	require.NoError(t, db.Create(&token).Error)
+	channels := []model.Channel{
+		{Id: 1, Name: "initial-channel", Type: 1, Key: "initial-test-key", Status: common.ChannelStatusEnabled, Models: "discount-model", Group: "default", Weight: common.GetPointer(uint(0))},
+		{Id: 2, Name: "controller-channel", Type: 1, Key: "controller-test-key", Status: common.ChannelStatusEnabled, Models: "discount-model", Group: "default", Weight: common.GetPointer(uint(100))},
+	}
+	for i := range channels {
+		require.NoError(t, db.Create(&channels[i]).Error)
+		require.NoError(t, channels[i].AddAbilities(db))
+	}
+	model.InitChannelCache()
+	_, err := model.AppendCustomerChannelDiscounts(t.Context(), user.Id, 9, 0, []model.CustomerChannelDiscount{
+		{ChannelID: 1, Model: "*", Multiplier: .8},
+		{ChannelID: 2, Model: "*", Multiplier: .5},
+	})
+	require.NoError(t, err)
+
+	request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"discount-model"}`))
+	request.Header.Set("Content-Type", "application/json")
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Request = request
+	common.SetContextKey(ctx, constant.ContextKeyUsingGroup, "default")
+	common.SetContextKey(ctx, constant.ContextKeyUserGroup, "default")
+	service.GetChannelConstraints(ctx).AddPin(appdto.ChannelPin{
+		ChannelId: 1, Source: appdto.PinSourceToken, Rank: appdto.PinRankToken, RetryMode: appdto.PinRetrySingleAttempt,
+	})
+	middleware.Distribute()(ctx)
+	initialChannelID := common.GetContextKeyInt(ctx, constant.ContextKeyChannelId)
+	require.Equal(t, 1, initialChannelID, "Distribute must honor the token channel pin")
+
+	info := &relaycommon.RelayInfo{
+		UserId: user.Id, TokenId: token.Id, TokenKey: token.Key, StartTime: time.Now(), ForcePreConsume: true,
+		OriginModelName: "discount-model", UserGroup: "default", UsingGroup: "default",
+		UserSetting: dto.UserSetting{BillingPreference: "wallet_only"},
+		ChannelMeta: &relaycommon.ChannelMeta{ChannelId: initialChannelID},
+		PriceData:   hosttypes.PriceData{QuotaToPreConsume: 1000, GroupRatioInfo: hosttypes.GroupRatioInfo{GroupRatio: 1}},
+	}
+	actualChannel, actualErr := getChannel(ctx, info, &service.RetryParam{
+		Ctx: ctx, TokenGroup: "default", ModelName: "discount-model", RequestPath: request.URL.Path, Retry: common.GetPointer(0),
+	})
+	require.Nil(t, actualErr)
+	require.Equal(t, 1, actualChannel.Id, "the controller must reuse the distributor's pinned channel on the first attempt")
+
+	common.SetContextKey(ctx, constant.ContextKeyChannelId, actualChannel.Id)
+	require.Nil(t, service.RefreshCustomerChannelDiscount(ctx, info))
+	assert.Equal(t, 800, service.ApplyCustomerChannelDiscount(info, info.PriceData.QuotaToPreConsume), "the pinned channel's discount must be used for pre-consumption")
+
+	apiErr := service.PreConsumeBilling(ctx, info.PriceData.QuotaToPreConsume, info)
+	require.NotNil(t, apiErr, "700 quota must not cover the pinned channel's discounted 800-quota reservation")
 }
 
 func TestCustomerChannelDiscountRejectsInvalidRules(t *testing.T) {

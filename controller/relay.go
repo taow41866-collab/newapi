@@ -280,6 +280,25 @@ func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service
 		service.RequestPolicy(c).BeginAttempt(channel, info.UsingGroup)
 		return channel, nil
 	}
+	// The distributor has already selected and configured the first channel
+	// before entering the relay loop. Re-selecting on retry=0 can bypass a
+	// token/session pin and, more importantly, make billing use a different
+	// channel than the one that was authorized. Only retries select a new
+	// channel through the normal constraint-aware path.
+	if retryParam.GetRetry() == 0 {
+		channelID := common.GetContextKeyInt(c, constant.ContextKeyChannelId)
+		if channelID > 0 {
+			channel, err := model.CacheGetChannel(channelID)
+			if err != nil || channel == nil {
+				if err == nil {
+					err = fmt.Errorf("channel %d not found", channelID)
+				}
+				return nil, types.NewError(fmt.Errorf("获取已选渠道 %d 失败: %w", channelID, err), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
+			}
+			service.RequestPolicy(c).BeginAttempt(channel, info.UsingGroup)
+			return channel, nil
+		}
+	}
 	channel, selectGroup, err := service.CacheGetRandomSatisfiedChannel(retryParam)
 	if err != nil {
 		return nil, types.NewError(fmt.Errorf("获取分组 %s 下模型 %s 的可用渠道失败（retry）: %s", selectGroup, info.OriginModelName, err.Error()), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
