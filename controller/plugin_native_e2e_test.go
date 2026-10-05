@@ -55,10 +55,14 @@ func (b *nativeRouteBilling) GetPreConsumedQuota() int {
 }
 
 func (b *nativeRouteBilling) Reserve(quota int) error {
-	b.events = append(b.events, "reserve")
-	if err := model.DecreaseUserQuota(b.userID, quota, true); err != nil {
+	if quota <= b.preConsumed {
+		return nil
+	}
+	delta := quota - b.preConsumed
+	if err := model.DecreaseUserQuota(b.userID, delta, true); err != nil {
 		return err
 	}
+	b.events = append(b.events, "reserve")
 	b.preConsumed = quota
 	return nil
 }
@@ -75,7 +79,7 @@ func TestKlingNativeRouteSubmitPollSettleAndQuery(t *testing.T) {
 	previousRedisEnabled := common.RedisEnabled
 	database, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	require.NoError(t, err)
-	require.NoError(t, database.AutoMigrate(&model.User{}, &model.Channel{}, &model.Task{}, &model.Log{}))
+	require.NoError(t, database.AutoMigrate(&model.User{}, &model.Channel{}, &model.Task{}, &model.Log{}, &model.Option{}))
 	model.DB = database
 	model.LOG_DB = database
 	common.MemoryCacheEnabled = false

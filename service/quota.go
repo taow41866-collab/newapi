@@ -204,7 +204,9 @@ func PostWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, mod
 	if tieredOk {
 		quota = tieredQuota
 	}
-	quota = ApplyCustomerChannelDiscount(relayInfo, quota)
+	if !tieredOk || tieredRes != nil || !tieredFallbackUsesPreConsumedQuota(relayInfo) {
+		quota = ApplyCustomerChannelDiscount(relayInfo, quota)
+	}
 
 	totalTokens := usage.TotalTokens
 	var logContent string
@@ -338,7 +340,9 @@ func PostAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, u
 	if tieredOk {
 		quota = tieredQuota
 	}
-	quota = ApplyCustomerChannelDiscount(relayInfo, quota)
+	if !tieredOk || tieredRes != nil || !tieredFallbackUsesPreConsumedQuota(relayInfo) {
+		quota = ApplyCustomerChannelDiscount(relayInfo, quota)
+	}
 
 	totalTokens := usage.TotalTokens
 	var logContent string

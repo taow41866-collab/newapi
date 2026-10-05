@@ -78,3 +78,16 @@ scoped review needs a short follow-up review of that changed code. After that,
 the final SQLite/MySQL/PostgreSQL accounting matrix may proceed; this review
 does not approve the broader feature, unrelated working-tree changes, CI, or
 release.
+
+## Follow-up: 2026-10-06
+
+The canonical-model finding above is superseded by the current checkout. `model/customer_channel_discount.go` now accepts canonical identities only when `CanonicalBillingModelNames` or an explicitly configured ratio plus a configured billing entry matches; the tests in `controller/customer_channel_discount_test.go` cover a configured `qwen3-max@effort:high@thinking:on`, reject `qwen3-max@made-up:anything`, and verify exact rule precedence over `*`.
+
+Verification on the current working tree:
+
+```text
+go test ./controller -run '^TestCustomerChannelDiscountCanonical(ModelRequiresConfiguredIdentity|ExactOverridesDefault)$' -count=1 -v
+PASS
+```
+
+The final billing service changes and the expression-error-plus-tool-surcharge path were separately reviewed by an independent agent and approved; see `CI_TIMEOUT_AUDIT.md` for the exact results and the remaining GitHub Linux CI gate. This follow-up does not approve unrelated dirty files or production release.

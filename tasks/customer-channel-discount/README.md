@@ -37,6 +37,14 @@ Local results observed on 2026-10-05:
 
 The final affected SQLite/MySQL/PostgreSQL accounting matrix and targeted canonical-model regressions passed after the latest repair. The scoped reviewer report is being refreshed against the current diff before release; do not infer that the earlier report approved the fix. Latest targeted canonical test command: `go test ./controller -run '^TestCustomerChannelDiscountCanonical' -count=1` (exit 0). Still pending: independent scoped re-review, final whole-branch review, selective Git commit/CI/image/restore-verified canary/publication, and exact old-image cleanup after successful release. Review and handoff ledger: .superpowers/sdd/README/progress.md. Preserve unrelated dirty edits; review separately before inclusion.
 
+### CI failure follow-up (2026-10-06)
+
+The authenticated log for CI run `37334014676` clarified that `make test` hit Go's default 10-minute test timeout while `TestResponsesWebSocketDialsNativeResponsesChannelTypes/new_api` was active. Other failures included customer-discounted expression fallback, estimated tiered fallback, the Kling test billing fake, and Responses stream tests. This was not the workflow's 15-minute job timeout. See `CI_TIMEOUT_AUDIT.md` for source and environment limits.
+
+The local fixes preserve already-discounted reservations, restore estimated fallback without a hold, discount additional tool surcharges separately using decimal arithmetic, make the Kling fake target/delta-based, and bound Responses upstream-observation waits. Verification after these fixes: `go test ./service -count=1`, `go vet ./service`, targeted Kling/Responses controller tests, five repeated native Responses-channel runs, and the fixed-price/task-settlement SQLite/MySQL/PostgreSQL matrix all passed. Linux DB validation used a cross-compiled Linux/amd64 test binary; WSL's Go 1.22.2 cannot run this Go 1.25.1 module's full suite. **A fresh GitHub Linux CI run is still required; these results do not authorize image build or production release.**
+
+Current staging checkout `codex/sd25-video-release` tracks `origin/color-fix-staging` at `58a666da0`. The fix files are not yet committed or pushed. All unrelated dirty files remain excluded from this release scope.
+
 ## Initial Source Findings
 
 Read-only investigation on local HEAD ce5a85f2aeaeffd4294a83a2428eb029fe28c389 (documentation-only descendant of the published source). These are entry points and design constraints, not proof of implemented discount behavior or a complete billing audit.

@@ -147,7 +147,7 @@ func runFixedPriceAccountingCases(t *testing.T, db, logDB *gorm.DB) {
 		{name: "customer discount image override reserve once", expression: `tier("image", fixed(0.04)) * image_count`, requestedImages: 1, outboundImages: 4, discount: 0.5, want: 40000, unit: billingexpr.BillingUnitRequest},
 		{name: "customer discount audio", expression: flat, audio: true, usage: &dto.Usage{}, discount: 0.5, want: 2500, unit: billingexpr.BillingUnitRequest},
 		{name: "customer discount realtime", expression: imageExpression, estimate: 10000, usage: imageUsage, realtime: true, discount: 0.5, want: 2000, unit: billingexpr.BillingUnitToken},
-		{name: "customer discounted evaluation failure retains reservation", expression: `p == 50 ? tier("error", param("missing") * p + img_cr * 2) : tier("request", fixed(0.01))`, estimate: 100, usage: &dto.Usage{PromptTokens: 50, TotalTokens: 50}, discount: 0.5, want: 2500, unit: billingexpr.BillingUnitRequest},
+		{name: "customer discounted evaluation failure retains reservation", expression: `p == 50 ? tier("error", param("missing") * p + img_cr * 2) : tier("request", fixed(0.01))`, estimate: 100, usage: &dto.Usage{PromptTokens: 50, TotalTokens: 50}, tool: true, discount: 0.5, want: 3500, unit: billingexpr.BillingUnitRequest},
 		{name: "customer discounted failure refunds exactly once", expression: flat, discount: 0.5, refund: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1102,6 +1102,22 @@ func TestComposeTieredTextQuotaErrorFallbackUsesPreConsumedQuota(t *testing.T) {
 
 	require.Equal(t, int64(12500), summary.ToolCallSurchargeQuota.Round(0).IntPart())
 	require.Equal(t, 14500, quota)
+}
+
+func TestComposeTieredTextQuotaDiscountsSurchargeAfterPreConsumedFallback(t *testing.T) {
+	relayInfo := &relaycommon.RelayInfo{
+		FinalPreConsumedQuota: 2500,
+		CustomerChannelDiscount: &relaycommon.CustomerChannelDiscountSnapshot{
+			Multiplier: 0.5,
+		},
+	}
+	summary := textQuotaSummary{
+		ToolCallSurchargeQuota: decimal.NewFromInt(12500),
+	}
+
+	quota := composeTieredTextQuota(relayInfo, summary, 2500, nil)
+
+	require.Equal(t, 8750, quota)
 }
 
 // TestTryTieredSettleRecordsClampOnOverflow guards that an oversized tiered

@@ -658,6 +658,33 @@ func TestTryTieredSettle_ErrorFallbackToEstimatedQuotaAfterGroup(t *testing.T) {
 	}
 }
 
+func TestTryTieredSettle_ErrorFallbackPrefersFinalPreConsumedQuota(t *testing.T) {
+	info := &relaycommon.RelayInfo{
+		FinalPreConsumedQuota: 500,
+		TieredBillingSnapshot: &billingexpr.BillingSnapshot{
+			BillingMode:              "tiered_expr",
+			ExprString:               `invalid expr!!!`,
+			ExprHash:                 billingexpr.ExprHashString(`invalid expr!!!`),
+			GroupRatio:               1.0,
+			EstimatedQuotaAfterGroup: 999,
+		},
+	}
+
+	ok, quota, result := TryTieredSettle(info, billingexpr.TokenParams{P: 100})
+	if !ok {
+		t.Fatal("expected tiered settle to apply")
+	}
+	if quota != 500 {
+		t.Fatalf("quota = %d, want final pre-consumed quota 500", quota)
+	}
+	if result != nil {
+		t.Fatal("result should be nil on error fallback")
+	}
+	if !tieredFallbackUsesPreConsumedQuota(info) {
+		t.Fatal("expected fallback to be recognized as already pre-consumed")
+	}
+}
+
 // ---------------------------------------------------------------------------
 // BuildTieredTokenParams: token normalization and ratio parity tests
 // ---------------------------------------------------------------------------

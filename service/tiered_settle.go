@@ -219,20 +219,19 @@ func TryTieredSettle(relayInfo *relaycommon.RelayInfo, params billingexpr.TokenP
 
 	tr, err := billingexpr.ComputeTieredQuotaWithRequest(snap, params, requestInput)
 	if err != nil {
-		// The request was already admitted using the frozen estimate. On an
-		// evaluation failure, preserve that reservation exactly; reusing the
-		// normal-price estimate would release a cheaper retry's held amount and
-		// could apply the customer discount a second time at settlement.
+		// Prefer the amount held by the live billing session. If no reservation
+		// exists, retain the frozen pre-consume amount when available, otherwise
+		// fall back to the estimate used to admit the request.
 		if relayInfo.Billing != nil {
 			quota = relayInfo.Billing.GetPreConsumedQuota()
 			if quota > 0 {
 				return true, quota, nil
 			}
 		}
-		if quota <= 0 {
-			quota = relayInfo.FinalPreConsumedQuota
+		if relayInfo.FinalPreConsumedQuota > 0 {
+			return true, relayInfo.FinalPreConsumedQuota, nil
 		}
-		return true, quota, nil
+		return true, snap.EstimatedQuotaAfterGroup, nil
 	}
 
 	// Surface any single-request saturation from settlement onto RelayInfo so the
@@ -241,6 +240,18 @@ func TryTieredSettle(relayInfo *relaycommon.RelayInfo, params billingexpr.TokenP
 	noteQuotaClamp(relayInfo, tr.Clamp)
 
 	return true, tr.ActualQuotaAfterGroup, &tr
+}
+
+// tieredFallbackUsesPreConsumedQuota reports whether an expression-error
+// fallback is already net of the customer discount applied during reservation.
+func tieredFallbackUsesPreConsumedQuota(relayInfo *relaycommon.RelayInfo) bool {
+	if relayInfo == nil {
+		return false
+	}
+	if relayInfo.Billing != nil && relayInfo.Billing.GetPreConsumedQuota() > 0 {
+		return true
+	}
+	return relayInfo.FinalPreConsumedQuota > 0
 }
 
 // A failed evaluation retains the reservation and its estimated billing unit.

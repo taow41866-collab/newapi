@@ -98,22 +98,34 @@ func customerDiscountQuota(quota int, snap *relaycommon.CustomerChannelDiscountS
 	if quota <= 0 || snap == nil || snap.Multiplier == 1 {
 		return quota, nil
 	}
+	return common.QuotaFromDecimalChecked(customerDiscountAmount(decimal.NewFromInt(int64(quota)), snap))
+}
+
+func customerDiscountAmount(quota decimal.Decimal, snap *relaycommon.CustomerChannelDiscountSnapshot) decimal.Decimal {
+	if quota.Sign() <= 0 || snap == nil || snap.Multiplier == 1 {
+		return quota
+	}
 	// Invalid persisted data must never become a free charge or a credit.
 	if !validCustomerDiscountMultiplier(snap.Multiplier) {
 		common.SysError("invalid persisted customer channel discount multiplier")
-		return quota, nil
+		return quota
 	}
-	return common.QuotaFromDecimalChecked(decimal.NewFromInt(int64(quota)).Mul(decimal.NewFromFloat(snap.Multiplier)))
+	return quota.Mul(decimal.NewFromFloat(snap.Multiplier))
+}
+
+func applyCustomerChannelDiscountAmount(info *relaycommon.RelayInfo, normalAmount decimal.Decimal) decimal.Decimal {
+	if info == nil || info.SubscriptionV1Billing || info.BillingSource == BillingSourceSubscription {
+		return normalAmount
+	}
+	return customerDiscountAmount(normalAmount, info.CustomerChannelDiscount)
 }
 
 // ApplyCustomerChannelDiscount accepts the complete normal charge, including
 // cache, expression, image quantity and tool surcharges. Call exactly once at
 // the accounting boundary, never by inserting an OtherRatios entry.
 func ApplyCustomerChannelDiscount(info *relaycommon.RelayInfo, normalQuota int) int {
-	if info == nil || info.SubscriptionV1Billing || info.BillingSource == BillingSourceSubscription {
-		return normalQuota
-	}
-	quota, clamp := customerDiscountQuota(normalQuota, info.CustomerChannelDiscount)
+	amount := applyCustomerChannelDiscountAmount(info, decimal.NewFromInt(int64(normalQuota)))
+	quota, clamp := common.QuotaFromDecimalChecked(amount)
 	noteQuotaClamp(info, clamp)
 	return quota
 }
