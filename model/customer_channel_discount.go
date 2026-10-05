@@ -168,9 +168,7 @@ func AppendCustomerChannelDiscounts(ctx context.Context, userID, actorID int, ex
 				if !rule.Disabled || !errors.Is(channelErr, gorm.ErrRecordNotFound) {
 					return channelErr
 				}
-				continue
-			}
-			if !rule.Disabled && rule.Model != "*" {
+			} else if !rule.Disabled && rule.Model != "*" {
 				found := false
 				for name := range strings.SplitSeq(channel.Models, ",") {
 					found = found || strings.TrimSpace(name) == rule.Model

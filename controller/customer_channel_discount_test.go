@@ -75,8 +75,16 @@ func TestCustomerChannelDiscountHistoryAndIsolation(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, .7, rule.Multiplier, "disabled exact rule falls back to channel default")
 	assert.Equal(t, .4, stored.Rules[5].Multiplier, "previous snapshots stay immutable")
-	_, err = model.AppendCustomerChannelDiscounts(t.Context(), 123, 1, 3, []model.CustomerChannelDiscount{{ChannelID: 99, Model: "model-a", Multiplier: 1, Disabled: true}})
+	stored, err = model.AppendCustomerChannelDiscounts(t.Context(), 123, 1, 3, []model.CustomerChannelDiscount{{ChannelID: 99, Model: "model-a", Multiplier: 1, Disabled: true}})
 	require.NoError(t, err, "disabled tombstone may preserve removal of a deleted channel")
+	require.Len(t, stored.Rules, 8, "deleted-channel tombstone must be recorded in history")
+	tombstone := stored.Rules[7]
+	assert.Equal(t, 99, tombstone.ChannelID)
+	assert.Equal(t, "model-a", tombstone.Model)
+	assert.True(t, tombstone.Disabled)
+	assert.Equal(t, int64(4), tombstone.Version)
+	assert.Equal(t, 1, tombstone.ActorID)
+	assert.GreaterOrEqual(t, tombstone.EffectiveAt, initialTime)
 }
 
 func TestCustomerChannelDiscountRetryWalletAccounting(t *testing.T) {
