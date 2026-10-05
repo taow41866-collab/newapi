@@ -119,7 +119,12 @@ func persistPurchasePriceRules(ctx context.Context, submitted []PurchasePrice, a
 	var serialized string
 	err := DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		option := Option{Key: PurchasePricesOption}
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).FirstOrCreate(&option, Option{Key: PurchasePricesOption}).Error; err != nil {
+		// Upsert the empty row before locking so independent instances can
+		// safely append even when no rule has been configured yet.
+		if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&option).Error; err != nil {
+			return err
+		}
+		if err := lockForUpdate(tx).Where(&Option{Key: PurchasePricesOption}).First(&option).Error; err != nil {
 			return err
 		}
 		if option.Value != "" {

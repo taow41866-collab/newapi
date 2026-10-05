@@ -190,6 +190,10 @@ func UpdateOption(c *gin.Context) {
 		})
 		return
 	}
+	if option.Key == model.PurchasePricesOption {
+		c.JSON(http.StatusConflict, gin.H{"success": false, "message": "Use the append-only purchase price API"})
+		return
+	}
 	switch option.Value.(type) {
 	case bool:
 		option.Value = common.Interface2String(option.Value.(bool))

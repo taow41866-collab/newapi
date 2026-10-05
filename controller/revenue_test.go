@@ -1,14 +1,23 @@
 package controller
 
 import (
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"os/exec"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/driver/mysql"
+	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 )
 
@@ -238,6 +247,126 @@ func TestAppendPurchasePriceRulesRejectsEditingOrRemovingSavedHistory(t *testing
 	updated, err := model.AppendPurchasePriceRules(t.Context(), append(existing, addition))
 	require.NoError(t, err)
 	assert.Equal(t, append(existing, addition), updated)
+}
+
+func TestRevenueHistoryCannotBeOverwrittenThroughGenericOptions(t *testing.T) {
+	db := setupRevenueControllerTestDB(t)
+	previousRedis := common.RedisEnabled
+	common.RedisEnabled = false
+	t.Cleanup(func() { common.RedisEnabled = previousRedis })
+	require.NoError(t, db.AutoMigrate(&model.User{}, &model.AuditLog{}))
+	rules, err := model.AppendPurchasePriceRule(t.Context(), model.PurchasePrice{
+		ChannelID: 7, Model: "*", Unit: "model_multiplier", UnitPrice: ptr(0.75), Source: "saved quote",
+	})
+	require.NoError(t, err)
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodPut, "/api/option/", strings.NewReader(`{"key":"RevenuePurchasePrices","value":"[]"}`))
+	UpdateOption(ctx)
+	assert.Equal(t, http.StatusConflict, recorder.Code)
+	stored, err := model.GetPurchasePriceRules(t.Context())
+	require.NoError(t, err)
+	assert.Equal(t, rules, stored)
+}
+
+func TestRevenueAppendIndependentProcesses(t *testing.T) {
+	for _, dialect := range []struct{ kind, env string }{{"sqlite", ""}, {"mysql", "TEST_MYSQL_DSN"}, {"postgres", "TEST_POSTGRES_DSN"}} {
+		t.Run(dialect.kind, func(t *testing.T) {
+			if dialect.env != "" && os.Getenv(dialect.env) == "" {
+				t.Skip("set " + dialect.env + " to run this database")
+			}
+			db, dsn := newAuditTestDatabase(t, dialect.kind, os.Getenv(dialect.env))
+			sqlDB, err := db.DB()
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, sqlDB.Close()) })
+			if dialect.kind != "sqlite" {
+				nameQuery := "SELECT DATABASE()"
+				adminDialector := mysql.Open(os.Getenv(dialect.env))
+				if dialect.kind == "postgres" {
+					nameQuery = "SELECT current_database()"
+					adminDialector = postgres.Open(os.Getenv(dialect.env))
+				}
+				var name string
+				require.NoError(t, db.Raw(nameQuery).Scan(&name).Error)
+				require.True(t, strings.HasPrefix(name, "newapi_audit_"))
+				t.Cleanup(func() {
+					require.NoError(t, sqlDB.Close())
+					admin, err := gorm.Open(adminDialector, &gorm.Config{})
+					require.NoError(t, err)
+					require.NoError(t, admin.Exec("DROP DATABASE "+name).Error)
+					connection, err := admin.DB()
+					require.NoError(t, err)
+					require.NoError(t, connection.Close())
+				})
+			}
+			require.NoError(t, db.AutoMigrate(&model.Option{}))
+			query := "SELECT version()"
+			if dialect.kind == "sqlite" {
+				query = "SELECT sqlite_version()"
+			}
+			var version string
+			require.NoError(t, db.Raw(query).Scan(&version).Error)
+			t.Logf("database version: %s", version)
+			// Two independent processes bypass the package mutex. Start with
+			// no Option row so this also protects the first-write race.
+			start := make(chan struct{})
+			results := make(chan error, 2)
+			for range 2 {
+				go func() {
+					<-start
+					cmd := exec.Command(os.Args[0], "-test.run=^TestRevenueAppendProcessHelper$", "-test.timeout=30s")
+					cmd.Env = append(os.Environ(), "REVENUE_APPEND_HELPER="+dialect.kind, "REVENUE_APPEND_DSN="+dsn)
+					output, err := cmd.CombinedOutput()
+					if err != nil {
+						results <- fmt.Errorf("%w: %s", err, output)
+						return
+					}
+					results <- nil
+				}()
+			}
+			close(start)
+			for range 2 {
+				assert.NoError(t, <-results)
+			}
+			var option model.Option
+			require.NoError(t, db.Where(&model.Option{Key: model.PurchasePricesOption}).First(&option).Error)
+			var rules []model.PurchasePrice
+			require.NoError(t, common.UnmarshalJsonStr(option.Value, &rules))
+			require.Len(t, rules, 2)
+			assert.Greater(t, rules[1].EffectiveAt, rules[0].EffectiveAt)
+			assert.Equal(t, rules[0].UnitPrice, rules[1].UnitPrice)
+		})
+	}
+}
+
+func TestRevenueAppendProcessHelper(t *testing.T) {
+	kind := os.Getenv("REVENUE_APPEND_HELPER")
+	if kind == "" {
+		return
+	}
+	dsn := os.Getenv("REVENUE_APPEND_DSN")
+	var dialector gorm.Dialector
+	switch kind {
+	case "sqlite":
+		dialector = sqlite.Open(dsn + "?_pragma=busy_timeout(30000)&_pragma=journal_mode(WAL)")
+		common.SetMainDatabaseType(common.DatabaseTypeSQLite)
+	case "mysql":
+		dialector = mysql.Open(dsn)
+		common.SetMainDatabaseType(common.DatabaseTypeMySQL)
+	case "postgres":
+		dialector = postgres.Open(dsn)
+		common.SetMainDatabaseType(common.DatabaseTypePostgreSQL)
+	default:
+		t.Fatal("unsupported database")
+	}
+	db, err := gorm.Open(dialector, &gorm.Config{})
+	require.NoError(t, err)
+	model.DB = db
+	common.OptionMap = map[string]string{}
+	_, err = model.AppendPurchasePriceRule(t.Context(), model.PurchasePrice{
+		ChannelID: 7, Model: "*", Unit: "model_multiplier", UnitPrice: ptr(0.75), Source: "concurrent quote",
+	})
+	require.NoError(t, err)
 }
 
 func ptr(value float64) *float64 { return &value }

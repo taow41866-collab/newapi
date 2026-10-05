@@ -34,7 +34,11 @@ Root 在渠道编辑页维护上游成本规则；管理员在模型数据统计
 - 前端全量：180 个测试文件、2,197 项断言通过；渠道成本表单、模型数据栏和收入页定向测试 9 项通过。
 - `bun run typecheck`、`bun run build` 和本次 UI 文件定向 Oxlint 通过。全仓 `bun run lint` 仍有多处既有无关错误，本次改动文件无 lint error。
 - Go 收入/成本定向测试与 `go vet ./model ./controller` 通过；`go test ./model` 全量通过。Windows 下 `go test ./controller` 全量仍被无关的 `TestAPITokenAuditDatabaseMatrix` SQLite 临时库句柄清理失败阻断，Linux CI 是最终全量门禁。
-- 尚未推送、尚无本次功能 CI/镜像/生产发布证据。必须等待所发布提交的 CI 与不可变镜像验证后才能开始线上切换。
+- 功能提交 `5b63edd970c6eabe67725774f00c9b5678629899` 的 CI `37281120945` 与镜像构建 `37281806214` 成功；最终审查又发现并修复通用 Option API 可覆盖历史规则的问题，必须以新增修复提交重新验收、构建，不发布旧候选镜像。
+- 2026-10-05 最终审查：新增回归先复现通用 `PUT /api/option/` 将历史规则清空（200），修复后返回 409 且历史不变；追加事务改为先幂等建立规则行，再使用统一 `lockForUpdate` 加锁。
+- 两个独立进程并发首次追加通过：SQLite 3.50.4、MySQL 8.0.46、PostgreSQL 16.15；两条规则均保留且生效时间递增。WSL 的 Go 工具链下载超时，采用 Windows 交叉编译 Linux 测试二进制，临时账号和数据库清理完成。
+- 当前定向 Go 测试、`go vet ./model ./controller`、路由权限测试通过；3 个前端测试文件 9 项通过，`bun run typecheck` 通过。最终 Linux 全量 CI 仍须以新增提交结果为准。
+- 发布脚本复用现有 Canvas 文件，仅更新镜像内 New API 前端与后端；隔离恢复库验证 Root 追加、管理员拒绝写入、历史不可覆盖和无效规则拒绝，不写生产采购价、不调用付费上游。
 
 ## 发布门禁
 
