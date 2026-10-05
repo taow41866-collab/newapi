@@ -19,6 +19,11 @@ For commercial licensing, please contact support@quantumnous.com
 // Static translation keys that don't get picked up by the t('...') regex.
 // These cover dynamic labels (e.g. constants, configs) that are passed into t at runtime.
 export const STATIC_I18N_KEYS = [
+  "Use an exact model name or *",
+  "Duplicate channel/model rule",
+  "Channel ID must be a positive integer",
+  "Model name must not exceed 255 characters",
+  "Discount multiplier must be greater than 0 and at most 1",
   'Task usage metadata is unavailable. Pricing details cannot be displayed.',
   'This expression cannot be expanded into a price table. View the original expression below.',
   'This operation is only supported for vLLM or SGLang channels',
@@ -402,6 +407,14 @@ export const STATIC_I18N_KEYS = [
   'Encourages new topics',
   'Caps the response length',
   'Keeps compatible responses more repeatable',
+  'Automatic',
+  'Adjust reasoning effort',
+  'Reset reasoning effort',
+  'Light reasoning',
+  'Minimal reasoning',
+  'Balanced reasoning',
+  'Heavy reasoning',
+  'Extra-high reasoning',
   'All Status',
   'All Sync Status',
   'Official Sync',

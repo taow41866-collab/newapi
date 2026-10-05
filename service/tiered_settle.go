@@ -165,6 +165,9 @@ func refreshTieredBillingGroup(relayInfo *relaycommon.RelayInfo) (*billingexpr.B
 // estimate before sending. If the initial group was free and skipped
 // pre-consume, switching to a paid group creates the session at that point.
 func PrepareTieredBillingForSelectedGroup(c *gin.Context, relayInfo *relaycommon.RelayInfo) *types.NewAPIError {
+	if apiErr := RefreshCustomerChannelDiscount(c, relayInfo); apiErr != nil {
+		return apiErr
+	}
 	snap, err := refreshTieredBillingGroup(relayInfo)
 	if err != nil {
 		return types.NewErrorWithStatusCode(
@@ -175,7 +178,10 @@ func PrepareTieredBillingForSelectedGroup(c *gin.Context, relayInfo *relaycommon
 		)
 	}
 	if snap == nil {
-		return nil
+		if relayInfo == nil || relayInfo.SubscriptionV1Billing || relayInfo.PriceData.FreeModel && relayInfo.Billing == nil {
+			return nil
+		}
+		return ReserveCustomerChannelBilling(c, relayInfo, relayInfo.PriceData.QuotaToPreConsume)
 	}
 	if snap.GroupRatio == 0 {
 		// Paid-to-free keeps FreeModel as-is: FreeModel means "pre-consume was
@@ -188,14 +194,7 @@ func PrepareTieredBillingForSelectedGroup(c *gin.Context, relayInfo *relaycommon
 	// initial group was free so downstream state stays consistent.
 	relayInfo.PriceData.FreeModel = false
 
-	if relayInfo.Billing == nil {
-		return PreConsumeBilling(c, snap.EstimatedQuotaAfterGroup, relayInfo)
-	}
-	if err := relayInfo.Billing.Reserve(snap.EstimatedQuotaAfterGroup); err != nil {
-		return types.NewError(err, types.ErrorCodeUpdateDataError, types.ErrOptionWithSkipRetry())
-	}
-	relayInfo.FinalPreConsumedQuota = relayInfo.Billing.GetPreConsumedQuota()
-	return nil
+	return ReserveCustomerChannelBilling(c, relayInfo, snap.EstimatedQuotaAfterGroup)
 }
 
 // TryTieredSettle checks if the request uses tiered_expr billing and, if so,
@@ -220,9 +219,18 @@ func TryTieredSettle(relayInfo *relaycommon.RelayInfo, params billingexpr.TokenP
 
 	tr, err := billingexpr.ComputeTieredQuotaWithRequest(snap, params, requestInput)
 	if err != nil {
-		quota = relayInfo.FinalPreConsumedQuota
+		// The request was already admitted using the frozen estimate. On an
+		// evaluation failure, preserve that reservation exactly; reusing the
+		// normal-price estimate would release a cheaper retry's held amount and
+		// could apply the customer discount a second time at settlement.
+		if relayInfo.Billing != nil {
+			quota = relayInfo.Billing.GetPreConsumedQuota()
+			if quota > 0 {
+				return true, quota, nil
+			}
+		}
 		if quota <= 0 {
-			quota = snap.EstimatedQuotaAfterGroup
+			quota = relayInfo.FinalPreConsumedQuota
 		}
 		return true, quota, nil
 	}

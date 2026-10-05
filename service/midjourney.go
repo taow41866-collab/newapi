@@ -30,6 +30,40 @@ func CovertMjpActionToModelName(mjAction string) string {
 	return modelName
 }
 
+// PrepareMidjourneyWalletBilling reserves the final wallet price before sending
+// the single-attempt upstream submission. Legacy Midjourney never uses subscriptions.
+func PrepareMidjourneyWalletBilling(c *gin.Context, relayInfo *relaycommon.RelayInfo, quota int, shouldBill bool) error {
+	if !shouldBill {
+		return nil
+	}
+	if relayInfo == nil || quota < 0 {
+		return errors.New("invalid Midjourney billing request")
+	}
+	if relayInfo.SubscriptionV1Billing || relayInfo.BillingSource == BillingSourceSubscription {
+		return errors.New("legacy Midjourney billing does not support subscriptions")
+	}
+	if relayInfo.Billing != nil {
+		return errors.New("Midjourney billing is already prepared")
+	}
+	relayInfo.BillingSource = BillingSourceWallet
+	if apiErr := RefreshCustomerChannelDiscount(c, relayInfo); apiErr != nil {
+		return apiErr
+	}
+	discounted := ApplyCustomerChannelDiscount(relayInfo, quota)
+	if relayInfo.QuotaClamp != nil {
+		return relayInfo.QuotaClamp
+	}
+	session := &BillingSession{relayInfo: relayInfo, funding: &WalletFunding{userId: relayInfo.UserId}}
+	forcePreConsume := relayInfo.ForcePreConsume
+	relayInfo.ForcePreConsume = true
+	defer func() { relayInfo.ForcePreConsume = forcePreConsume }()
+	if apiErr := session.preConsume(c, discounted); apiErr != nil {
+		return apiErr
+	}
+	relayInfo.Billing = session
+	return nil
+}
+
 // PrepareMidjourneyTaskBilling sets the durable refund marker before the task is inserted.
 func PrepareMidjourneyTaskBilling(relayInfo *relaycommon.RelayInfo, task *model.Midjourney, quota int, shouldBill bool) (bool, error) {
 	if task == nil {
@@ -47,14 +81,19 @@ func PrepareMidjourneyTaskBilling(relayInfo *relaycommon.RelayInfo, task *model.
 	if quota < 0 {
 		return false, errors.New("quota cannot be negative")
 	}
-	if relayInfo.BillingSource == BillingSourceSubscription {
+	if relayInfo.SubscriptionV1Billing || relayInfo.BillingSource == BillingSourceSubscription {
 		return false, errors.New("legacy Midjourney billing does not support subscriptions")
 	}
 
-	task.Quota = quota
+	task.Quota = ApplyCustomerChannelDiscount(relayInfo, quota)
 	task.BillingChannelId = task.ChannelId
-	if relayInfo.ChannelMeta != nil && relayInfo.ChannelId > 0 {
+	if relayInfo.CustomerDiscountResolved && relayInfo.CustomerDiscountChannelID > 0 {
+		task.BillingChannelId = relayInfo.CustomerDiscountChannelID
+	} else if relayInfo.ChannelMeta != nil && relayInfo.ChannelId > 0 {
 		task.BillingChannelId = relayInfo.ChannelId
+	}
+	if relayInfo.Billing != nil && !relayInfo.IsPlayground {
+		task.TokenId = relayInfo.TokenId
 	}
 	return true, nil
 }
@@ -71,7 +110,18 @@ func SettleMidjourneyTaskBilling(relayInfo *relaycommon.RelayInfo, task *model.M
 		return false, errors.New("Midjourney task must be persisted before billing")
 	}
 
-	result, billingErr := postConsumeQuotaWithResult(relayInfo, task.Quota, 0, true)
+	var result postConsumeQuotaResult
+	var billingErr error
+	if relayInfo.Billing != nil {
+		if task.Quota != relayInfo.Billing.GetPreConsumedQuota() {
+			return false, errors.New("Midjourney task charge differs from its reservation")
+		}
+		billingErr = relayInfo.Billing.Settle(task.Quota)
+		result.FundingApplied = billingErr == nil
+		result.TokenApplied = result.FundingApplied && !relayInfo.IsPlayground
+	} else {
+		result, billingErr = postConsumeQuotaWithResult(relayInfo, task.Quota, 0, true)
+	}
 	if !result.FundingApplied {
 		task.Quota = 0
 		task.TokenId = 0

@@ -36,6 +36,7 @@ type taskSubmissionTestBilling struct {
 	reserveErr error
 	onSettle   func()
 	refunds    int
+	reserved   int
 }
 
 func (b *taskSubmissionTestBilling) Settle(int) error {
@@ -52,9 +53,12 @@ func (b *taskSubmissionTestBilling) Refund(*gin.Context) {
 }
 
 func (b *taskSubmissionTestBilling) NeedsRefund() bool        { return b.refunds == 0 }
-func (b *taskSubmissionTestBilling) GetPreConsumedQuota() int { return 0 }
-func (b *taskSubmissionTestBilling) Reserve(int) error {
+func (b *taskSubmissionTestBilling) GetPreConsumedQuota() int { return b.reserved }
+func (b *taskSubmissionTestBilling) Reserve(quota int) error {
 	*b.events = append(*b.events, "reserve")
+	if b.reserveErr == nil {
+		b.reserved = max(b.reserved, quota)
+	}
 	return b.reserveErr
 }
 
@@ -143,6 +147,7 @@ func TestExecuteTaskSubmissionRefundsWhenInsertFails(t *testing.T) {
 		return &relay.TaskSubmitResult{
 			UpstreamTaskID: "upstream_private",
 			Platform:       constant.TaskPlatform("plugin"),
+			Quota:          100,
 		}, nil
 	})
 
@@ -165,6 +170,7 @@ func TestExecuteTaskSubmissionSettlementFailureStaysDurableAndWritesNothing(t *t
 		return &relay.TaskSubmitResult{
 			UpstreamTaskID: "upstream_private",
 			Platform:       constant.TaskPlatform("plugin"),
+			Quota:          100,
 		}, nil
 	})
 
@@ -412,6 +418,7 @@ func TestExecuteTaskSubmissionDisconnectAfterDurableInsertDoesNotRefund(t *testi
 		return &relay.TaskSubmitResult{
 			UpstreamTaskID: "upstream_private",
 			Platform:       constant.TaskPlatform("plugin"),
+			Quota:          100,
 		}, nil
 	})
 
@@ -424,6 +431,30 @@ func TestExecuteTaskSubmissionDisconnectAfterDurableInsertDoesNotRefund(t *testi
 	require.NoError(t, database.Model(&model.Task{}).Where("task_id = ?", "task_public").Count(&count).Error)
 	assert.Equal(t, int64(1), count)
 	assert.False(t, c.Writer.Written())
+}
+
+func TestExecuteTaskSubmissionKeepsSufficientReservation(t *testing.T) {
+	previousLogConsumeEnabled := common.LogConsumeEnabled
+	common.LogConsumeEnabled = false
+	t.Cleanup(func() { common.LogConsumeEnabled = previousLogConsumeEnabled })
+	for _, held := range []int{100, 200} {
+		t.Run(fmt.Sprint(held), func(t *testing.T) {
+			events := []string{}
+			database := setupTaskSubmissionDatabase(t, true, &events)
+			billing := &taskSubmissionTestBilling{events: &events, reserved: held, reserveErr: errors.New("redundant reservation")}
+			outcome, taskErr := executeTaskSubmissionWith(taskSubmissionTestContext(), taskSubmissionRelayInfo(billing), func(*gin.Context, *relaycommon.RelayInfo) (*relay.TaskSubmitResult, *dto.TaskError) {
+				return &relay.TaskSubmitResult{UpstreamTaskID: "upstream_private", Platform: "plugin", Quota: 100}, nil
+			})
+			require.Nil(t, taskErr)
+			require.NotNil(t, outcome)
+			assert.Equal(t, []string{"insert", "settle"}, events)
+			assert.Equal(t, held, billing.GetPreConsumedQuota())
+			assert.Zero(t, billing.refunds)
+			var stored model.Task
+			require.NoError(t, database.Where("task_id = ?", "task_public").First(&stored).Error)
+			assert.Equal(t, 100, stored.Quota)
+		})
+	}
 }
 
 // setupTaskSubmissionDatabase opens the dialect selected by
@@ -478,6 +509,7 @@ func taskSubmissionRelayInfo(billing relaycommon.BillingSettler) *relaycommon.Re
 // runs leave a record.
 func openTaskDialectDatabase(t *testing.T, models ...any) (*gorm.DB, common.DatabaseType) {
 	t.Helper()
+	models = append(models, &model.Option{})
 	dialect := common.DatabaseType(os.Getenv("TEST_TASK_DB_DIALECT"))
 	var driver gorm.Dialector
 	switch dialect {

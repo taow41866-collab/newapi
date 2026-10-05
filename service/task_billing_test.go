@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"math"
 	"net/http"
 	"net/http/httptest"
@@ -12,10 +13,12 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	"github.com/QuantumNous/new-api/pkg/jsplugin"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
@@ -47,6 +50,7 @@ func TestMain(m *testing.M) {
 
 	if err := db.AutoMigrate(
 		&model.Task{},
+		&model.Option{},
 		&model.User{},
 		&model.Token{},
 		&model.Log{},
@@ -186,6 +190,120 @@ func TestPriceDataOtherRatiosFilterAndSnapshot(t *testing.T) {
 	nextSnapshot := priceData.OtherRatios()
 	assert.Equal(t, 2.5, nextSnapshot["positive"])
 	assert.NotContains(t, nextSnapshot, "new")
+}
+
+func TestCustomerDiscountTaskRecalculationAndRefundUseFrozenWalletPrice(t *testing.T) {
+	truncate(t)
+	const userID, channelID, tokenID = 610, 611, 612
+	seedUser(t, userID, 9000)
+	seedToken(t, tokenID, userID, "customer-discount-task", 9000)
+	seedChannel(t, channelID)
+	seedChargedAccounting(t, userID, channelID, tokenID, 1000, 1)
+	task := makeTask(userID, channelID, 1000, tokenID, BillingSourceWallet, 0)
+	task.PrivateData.BillingContext.CustomerChannelDiscount = &relaycommon.CustomerChannelDiscountSnapshot{UserID: userID, ChannelID: channelID, Model: "*", Multiplier: 0.5, Version: 1, EffectiveAt: 1000}
+	require.NoError(t, model.DB.Create(task).Error)
+	RecalculateTaskQuota(context.Background(), task, 3000, "video seconds")
+	assert.Equal(t, 1500, task.Quota)
+	assert.Equal(t, 8500, getUserQuota(t, userID))
+	assert.Equal(t, 8500, getTokenRemainQuota(t, tokenID))
+	used, requests := getUserUsageAccounting(t, userID)
+	assert.Equal(t, 1500, used)
+	assert.Equal(t, 1, requests)
+	assert.Equal(t, int64(1500), getChannelUsedQuota(t, channelID))
+	assert.Equal(t, 500, getLastLog(t).Quota)
+	require.True(t, RefundTaskQuota(context.Background(), task, "upstream failed"))
+	assert.Equal(t, 10000, getUserQuota(t, userID))
+	assert.Equal(t, 10000, getTokenRemainQuota(t, tokenID))
+	assert.Zero(t, task.Quota)
+	assert.Equal(t, 1500, getLastLog(t).Quota)
+}
+
+func TestCustomerDiscountTaskDoesNotChangeSubscriptionPrice(t *testing.T) {
+	truncate(t)
+	const userID, channelID, subID = 620, 621, 622
+	seedUser(t, userID, 10000)
+	seedChannel(t, channelID)
+	seedSubscription(t, subID, userID, 10000, 1000)
+	seedChargedAccounting(t, userID, channelID, 0, 1000, 1)
+	task := makeTask(userID, channelID, 1000, 0, BillingSourceSubscription, subID)
+	task.PrivateData.BillingContext.CustomerChannelDiscount = &relaycommon.CustomerChannelDiscountSnapshot{UserID: userID, ChannelID: channelID, Multiplier: 0.5}
+	require.NoError(t, model.DB.Create(task).Error)
+	RecalculateTaskQuota(context.Background(), task, 3000, "subscription video")
+	assert.Equal(t, 3000, task.Quota)
+	assert.Equal(t, int64(3000), getSubscriptionUsed(t, subID))
+	assert.Equal(t, 10000, getUserQuota(t, userID))
+}
+
+func TestCustomerDiscountRetryReservesDifferenceAndFreezesHistory(t *testing.T) {
+	truncate(t)
+	const userID, tokenID = 630, 631
+	seedUser(t, userID, 10000)
+	seedToken(t, tokenID, userID, "customer-discount-retry", 10000)
+	history := model.CustomerChannelDiscountHistory{Version: 1, Rules: []model.CustomerChannelDiscount{
+		{ChannelID: 632, Model: "*", Multiplier: .5, Version: 1, EffectiveAt: 1000, ActorID: 1},
+		{ChannelID: 633, Model: "*", Multiplier: .8, Version: 1, EffectiveAt: 1000, ActorID: 1},
+	}}
+	encoded, err := common.Marshal(history)
+	require.NoError(t, err)
+	option := model.Option{Key: fmt.Sprint(model.CustomerChannelDiscountOptionPrefix, userID), Value: string(encoded)}
+	require.NoError(t, model.DB.Create(&option).Error)
+	t.Cleanup(func() {
+		require.NoError(t, model.DB.Where(&model.Option{Key: option.Key}).Delete(&model.Option{}).Error)
+	})
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Request = httptest.NewRequest("POST", "/v1/chat/completions", nil)
+	common.SetContextKey(ctx, constant.ContextKeyChannelId, 632)
+	info := &relaycommon.RelayInfo{UserId: userID, TokenId: tokenID, TokenKey: "customer-discount-retry", OriginModelName: "model-a", StartTime: time.UnixMilli(1000), ForcePreConsume: true, UserSetting: dto.UserSetting{BillingPreference: "wallet_only"}}
+	require.Nil(t, PreConsumeBilling(ctx, 1000, info))
+	assert.Equal(t, 500, info.Billing.GetPreConsumedQuota())
+	assert.Equal(t, 9500, getUserQuota(t, userID))
+	// This replacement shares the first read's millisecond but must not affect
+	// another channel attempt belonging to the already admitted request.
+	history.Version = 2
+	history.Rules = append(history.Rules, model.CustomerChannelDiscount{ChannelID: 633, Model: "*", Multiplier: .2, Version: 2, EffectiveAt: 1000, ActorID: 1})
+	encoded, err = common.Marshal(history)
+	require.NoError(t, err)
+	require.NoError(t, model.DB.Model(&option).Update("value", string(encoded)).Error)
+	common.SetContextKey(ctx, constant.ContextKeyChannelId, 633)
+	require.Nil(t, ReserveCustomerChannelBilling(ctx, info, 1000))
+	require.Nil(t, ReserveCustomerChannelBilling(ctx, info, 1000))
+	assert.Equal(t, .8, info.CustomerChannelDiscount.Multiplier)
+	assert.Equal(t, 800, info.Billing.GetPreConsumedQuota())
+	assert.Equal(t, 9200, getUserQuota(t, userID))
+	assert.Equal(t, 9200, getTokenRemainQuota(t, tokenID))
+	common.SetContextKey(ctx, constant.ContextKeyChannelId, 632)
+	require.Nil(t, ReserveCustomerChannelBilling(ctx, info, 1000))
+	require.NoError(t, SettleBilling(ctx, info, ApplyCustomerChannelDiscount(info, 1000)))
+	assert.Equal(t, 9500, getUserQuota(t, userID))
+	assert.Equal(t, 9500, getTokenRemainQuota(t, tokenID))
+}
+
+func TestTieredSettlementFailureKeepsFrozenDiscountedReservation(t *testing.T) {
+	truncate(t)
+	const userID, tokenID, channelID = 640, 641, 642
+	seedUser(t, userID, 10000)
+	seedToken(t, tokenID, userID, "tiered-discount-failure", 10000)
+	seedChannel(t, channelID)
+	seedChannel(t, channelID+1)
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	common.SetContextKey(ctx, constant.ContextKeyChannelId, channelID)
+	info := &relaycommon.RelayInfo{UserId: userID, TokenId: tokenID, TokenKey: "tiered-discount-failure", OriginModelName: "model-a", BillingModelName: "model-a", StartTime: time.Now(), ForcePreConsume: true, UserSetting: dto.UserSetting{BillingPreference: "wallet_only"}, ChannelMeta: &relaycommon.ChannelMeta{ChannelId: channelID}, PriceData: types.PriceData{GroupRatioInfo: types.GroupRatioInfo{GroupRatio: 1}}}
+	info.TieredBillingSnapshot = &billingexpr.BillingSnapshot{BillingMode: "tiered_expr", ExprString: "tier(\"base\", unknown_variable)", ExprHash: billingexpr.ExprHashString("tier(\"base\", unknown_variable)"), EstimatedQuotaBeforeGroup: 1000, EstimatedQuotaAfterGroup: 1000, GroupRatio: 1}
+	info.CustomerChannelDiscount = &relaycommon.CustomerChannelDiscountSnapshot{UserID: userID, ChannelID: channelID, Model: "model-a", Multiplier: .5, Version: 1, EffectiveAt: time.Now().UnixMilli()}
+	info.CustomerDiscountResolved = true
+	info.CustomerDiscountChannelID = channelID
+	require.Nil(t, PreConsumeBilling(ctx, 1000, info))
+	require.Equal(t, 500, info.Billing.GetPreConsumedQuota())
+	common.SetContextKey(ctx, constant.ContextKeyChannelId, channelID+1)
+	info.CustomerChannelDiscount = &relaycommon.CustomerChannelDiscountSnapshot{UserID: userID, ChannelID: channelID + 1, Model: "model-a", Multiplier: .8, Version: 1, EffectiveAt: time.Now().UnixMilli()}
+	info.CustomerDiscountResolved = true
+	info.CustomerDiscountChannelID = channelID + 1
+	require.Nil(t, ReserveCustomerChannelBilling(ctx, info, 1000))
+	ok, quota, result := TryTieredSettle(info, billingexpr.TokenParams{P: 1})
+	require.True(t, ok)
+	assert.NotNil(t, result)
+	assert.Equal(t, 0, quota)
 }
 
 func TestPriceDataReplaceAndApplyOtherRatios(t *testing.T) {
@@ -584,6 +702,151 @@ func countLogs(t *testing.T) int64 {
 // ===========================================================================
 // Legacy Midjourney billing tests
 // ===========================================================================
+
+func TestCustomerDiscountMidjourneyWalletLifecycle(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		model string
+		want  int
+	}{
+		{"exact override without stacking", "mj_imagine", 1501},
+		{"channel default rounds once", "mj_variation", 2101},
+		{"unconfigured channel keeps normal price", "mj_imagine", 3001},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			truncate(t)
+			const userID, tokenID, channelID = 680, 681, 682
+			seedUser(t, userID, tc.want)
+			seedToken(t, tokenID, userID, "mj-discount-wallet", tc.want)
+			seedChannel(t, channelID)
+			history := model.CustomerChannelDiscountHistory{Version: 1, Rules: []model.CustomerChannelDiscount{
+				{ChannelID: channelID, Model: "*", Multiplier: .7, Version: 1, EffectiveAt: 1000, ActorID: 1},
+				{ChannelID: channelID, Model: "mj_imagine", Multiplier: .5, Version: 1, EffectiveAt: 1000, ActorID: 1},
+				{ChannelID: channelID + 1, Model: "*", Multiplier: .1, Version: 1, EffectiveAt: 1000, ActorID: 1},
+			}}
+			encoded, err := common.Marshal(history)
+			require.NoError(t, err)
+			option := model.Option{Key: fmt.Sprint(model.CustomerChannelDiscountOptionPrefix, userID), Value: string(encoded)}
+			require.NoError(t, model.DB.Create(&option).Error)
+			t.Cleanup(func() { require.NoError(t, model.DB.Delete(&option).Error) })
+			ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+			ctx.Request = httptest.NewRequest(http.MethodPost, "/mj/submit/imagine", nil)
+			actualChannelID := channelID
+			if tc.want == 3001 {
+				actualChannelID = channelID + 2
+				seedChannel(t, actualChannelID)
+			}
+			common.SetContextKey(ctx, constant.ContextKeyChannelId, actualChannelID)
+			info := &relaycommon.RelayInfo{UserId: userID, TokenId: tokenID, TokenKey: "mj-discount-wallet", OriginModelName: tc.model,
+				StartTime: time.UnixMilli(1000), ChannelMeta: &relaycommon.ChannelMeta{ChannelId: channelID + 1}}
+			require.NoError(t, PrepareMidjourneyWalletBilling(ctx, info, 3001, true))
+			if tc.want != 3001 {
+				require.NotNil(t, info.CustomerChannelDiscount)
+				assert.Equal(t, actualChannelID, info.CustomerChannelDiscount.ChannelID)
+			} else {
+				assert.Nil(t, info.CustomerChannelDiscount)
+			}
+			assert.Equal(t, tc.want, info.Billing.GetPreConsumedQuota())
+			assert.Zero(t, getUserQuota(t, userID))
+			assert.Zero(t, getTokenRemainQuota(t, tokenID))
+			task := &model.Midjourney{UserId: userID, ChannelId: actualChannelID, Action: "IMAGINE", MjId: tc.name}
+			prepared, err := PrepareMidjourneyTaskBilling(info, task, 3001, true)
+			require.NoError(t, err)
+			require.True(t, prepared)
+			require.NoError(t, task.Insert())
+			applied, err := SettleMidjourneyTaskBilling(info, task, prepared)
+			require.NoError(t, err)
+			require.True(t, applied)
+			assert.Equal(t, tc.want, getMidjourneyTask(t, task.Id).Quota)
+			assert.Equal(t, tokenID, getMidjourneyTask(t, task.Id).TokenId)
+			assert.Zero(t, getUserQuota(t, userID), "settlement must not charge again")
+			assert.Zero(t, getTokenRemainQuota(t, tokenID))
+			_, err = SettleMidjourneyTaskBilling(info, task, prepared)
+			require.NoError(t, err)
+			assert.Zero(t, getUserQuota(t, userID), "duplicate settlement must not debit the wallet")
+			assert.Zero(t, getTokenRemainQuota(t, tokenID))
+			other := GenerateMjOtherInfo(info, types.PriceData{})
+			model.RecordConsumeLog(ctx, userID, model.RecordConsumeLogParams{ChannelId: task.GetBillingChannelId(), ModelName: tc.model, Quota: task.Quota, TokenId: task.TokenId, Other: other})
+			seedChargedAccounting(t, userID, actualChannelID, tokenID, task.Quota, 1)
+			assert.Equal(t, tc.want, getLastLog(t).Quota)
+			if tc.want != 3001 {
+				assert.Contains(t, getLastLog(t).Other, "customer_channel_discount")
+			}
+			// A later rule edit must not affect the persisted refund amount.
+			require.NoError(t, model.DB.Model(&option).Update("value", `{"version":2,"rules":[]}`).Error)
+			persisted := getMidjourneyTask(t, task.Id)
+			require.True(t, RefundMidjourneyQuota(ctx, &persisted, "upstream failure"))
+			assert.Equal(t, tc.want, getUserQuota(t, userID))
+			assert.Equal(t, tc.want, getTokenRemainQuota(t, tokenID))
+			assert.Zero(t, getTokenUsedQuota(t, tokenID))
+			usedQuota, requestCount := getUserUsageAccounting(t, userID)
+			assert.Zero(t, usedQuota)
+			assert.Equal(t, 1, requestCount)
+			assert.Zero(t, getChannelUsedQuota(t, actualChannelID))
+			assert.Equal(t, tc.want, getLastLog(t).Quota)
+			require.True(t, RefundMidjourneyQuota(ctx, &persisted, "duplicate poll"))
+			assert.Equal(t, int64(2), countLogs(t))
+		})
+	}
+}
+
+func TestCustomerDiscountMidjourneySubmissionFailureRefundsReservation(t *testing.T) {
+	truncate(t)
+	const userID, tokenID, channelID = 686, 687, 688
+	seedUser(t, userID, 1000)
+	seedToken(t, tokenID, userID, "mj-discount-failure", 1000)
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/mj/submit/imagine", nil)
+	common.SetContextKey(ctx, constant.ContextKeyChannelId, channelID)
+	info := &relaycommon.RelayInfo{UserId: userID, TokenId: tokenID, TokenKey: "mj-discount-failure", OriginModelName: "mj_imagine",
+		CustomerDiscountHistoryLoaded: true, CustomerDiscountHistory: []relaycommon.CustomerChannelDiscountRule{{CustomerChannelDiscountSnapshot: relaycommon.CustomerChannelDiscountSnapshot{ChannelID: channelID, Model: "*", Multiplier: .5, Version: 1}}}}
+	require.NoError(t, PrepareMidjourneyWalletBilling(ctx, info, 1000, true))
+	assert.Equal(t, 500, getUserQuota(t, userID))
+	assert.Equal(t, 500, getTokenRemainQuota(t, tokenID))
+	task := &model.Midjourney{UserId: userID, ChannelId: channelID, MjId: "rejected"}
+	prepared, err := PrepareMidjourneyTaskBilling(info, task, 1000, false)
+	require.NoError(t, err)
+	require.False(t, prepared)
+	assert.Zero(t, task.Quota)
+	info.Billing.Refund(ctx)
+	info.Billing.Refund(ctx)
+	require.Eventually(t, func() bool {
+		return getUserQuota(t, userID) == 1000 && getTokenRemainQuota(t, tokenID) == 1000
+	}, time.Second, time.Millisecond)
+	assert.Zero(t, getTokenUsedQuota(t, tokenID))
+	assert.Zero(t, countLogs(t))
+}
+
+func TestCustomerDiscountMidjourneyPreConsumeGuards(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		wallet, token int
+		subscription  bool
+	}{
+		{"wallet insufficient", 499, 1000, false},
+		{"token insufficient", 1000, 499, false},
+		{"subscription unchanged", 1000, 1000, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			truncate(t)
+			const userID, tokenID, channelID = 683, 684, 685
+			seedUser(t, userID, tc.wallet)
+			seedToken(t, tokenID, userID, "mj-discount-guard", tc.token)
+			ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+			ctx.Request = httptest.NewRequest(http.MethodPost, "/mj/submit/imagine", nil)
+			common.SetContextKey(ctx, constant.ContextKeyChannelId, channelID)
+			info := &relaycommon.RelayInfo{UserId: userID, TokenId: tokenID, TokenKey: "mj-discount-guard", OriginModelName: "mj_imagine",
+				CustomerDiscountHistoryLoaded: true, CustomerDiscountHistory: []relaycommon.CustomerChannelDiscountRule{{CustomerChannelDiscountSnapshot: relaycommon.CustomerChannelDiscountSnapshot{ChannelID: channelID, Model: "*", Multiplier: .5, Version: 1}}}}
+			if tc.subscription {
+				info.BillingSource = BillingSourceSubscription
+			}
+			require.Error(t, PrepareMidjourneyWalletBilling(ctx, info, 1000, true))
+			assert.Equal(t, tc.wallet, getUserQuota(t, userID))
+			assert.Equal(t, tc.token, getTokenRemainQuota(t, tokenID))
+			assert.Nil(t, info.Billing)
+		})
+	}
+}
 
 func TestPrepareMidjourneyTaskBillingKeepsUnbilledMarkerClear(t *testing.T) {
 	task := &model.Midjourney{Quota: 900, TokenId: 7, BillingChannelId: 8}

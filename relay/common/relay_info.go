@@ -82,6 +82,22 @@ type TokenCountMeta struct {
 	estimatePromptTokens int
 }
 
+// CustomerChannelDiscountSnapshot freezes the selected wallet rule without
+// importing model (model task persistence already depends on this package).
+type CustomerChannelDiscountSnapshot struct {
+	UserID      int     `json:"user_id"`
+	ChannelID   int     `json:"channel_id"`
+	Model       string  `json:"model"`
+	Multiplier  float64 `json:"multiplier"`
+	Version     int64   `json:"version"`
+	EffectiveAt int64   `json:"effective_at"`
+}
+
+type CustomerChannelDiscountRule struct {
+	CustomerChannelDiscountSnapshot
+	Disabled bool
+}
+
 type RelayInfo struct {
 	TokenId           int
 	TokenKey          string
@@ -145,7 +161,12 @@ type RelayInfo struct {
 	Billing BillingSettler
 	// BillingSource indicates whether this request is billed from wallet quota or subscription.
 	// "" or "wallet" => wallet; "subscription" => subscription
-	BillingSource string
+	BillingSource                 string
+	CustomerChannelDiscount       *CustomerChannelDiscountSnapshot
+	CustomerDiscountChannelID     int
+	CustomerDiscountResolved      bool
+	CustomerDiscountHistoryLoaded bool
+	CustomerDiscountHistory       []CustomerChannelDiscountRule
 	// SubscriptionId is the user_subscriptions.id used when BillingSource == "subscription"
 	SubscriptionId int
 	// SubscriptionPreConsumed is the amount pre-consumed on subscription item (quota units or 1)

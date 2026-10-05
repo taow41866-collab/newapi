@@ -145,6 +145,28 @@ export interface ManageUserQuotaPayload {
   value: number
 }
 
+export interface CustomerChannelDiscount {
+  channel_id: number
+  model: string
+  multiplier: number
+  disabled: boolean
+  version: number
+  effective_at: number
+  actor_id: number
+}
+
+export interface CustomerChannelDiscountInput {
+  channel_id: number
+  model: string
+  multiplier: number
+  disabled?: boolean
+}
+
+export interface CustomerChannelDiscountHistory {
+  version: number
+  rules: CustomerChannelDiscount[]
+}
+
 // ============================================================================
 // Dialog Types
 // ============================================================================

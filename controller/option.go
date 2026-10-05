@@ -86,6 +86,9 @@ func GetOptions(c *gin.Context) {
 	optionValues := make(map[string]string)
 	common.OptionMapRWMutex.Lock()
 	for k, v := range common.OptionMap {
+		if strings.HasPrefix(k, model.CustomerChannelDiscountOptionPrefix) {
+			continue
+		}
 		if k == "theme.frontend" || k == "billing_setting.billing_mode" || k == "billing_setting.billing_expr" {
 			continue
 		}
@@ -188,6 +191,10 @@ func UpdateOption(c *gin.Context) {
 			"success": false,
 			"message": "无效的参数",
 		})
+		return
+	}
+	if strings.HasPrefix(option.Key, model.CustomerChannelDiscountOptionPrefix) {
+		c.JSON(http.StatusConflict, gin.H{"success": false, "message": "Use the versioned customer discount API"})
 		return
 	}
 	if option.Key == model.PurchasePricesOption {

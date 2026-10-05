@@ -77,6 +77,7 @@ func LogTaskConsumption(c *gin.Context, info *relaycommon.RelayInfo, task *model
 		setTaskImageCount(other, info.PriceData.OtherRatios()["image_count"])
 	}
 	appendTaskLogInfo(task, other)
+	appendBillingInfo(info, other)
 	attachQuotaSaturation(c, info, other)
 	model.RecordConsumeLog(c, info.UserId, model.RecordConsumeLogParams{
 		ChannelId: info.ChannelId,
@@ -153,6 +154,9 @@ func taskBillingOther(task *model.Task) *model.LogOther {
 			other.SetPublic("model_ratio", bc.ModelRatio)
 		}
 		other.SetPublic("group_ratio", bc.GroupRatio)
+		if !taskIsSubscription(task) {
+			appendCustomerDiscountInfo(other, bc.CustomerChannelDiscount)
+		}
 		if priceData := taskBillingContextPriceData(bc); priceData != nil {
 			for k, v := range priceData.OtherRatios() {
 				if !other.SetPublic(k, v) {
@@ -309,6 +313,11 @@ func RefundTaskQuota(ctx context.Context, task *model.Task, reason string) bool 
 func RecalculateTaskQuota(ctx context.Context, task *model.Task, actualQuota int, reason string, clamps ...*common.QuotaClamp) {
 	if actualQuota < 0 {
 		return
+	}
+	if bc := task.PrivateData.BillingContext; bc != nil && !taskIsSubscription(task) {
+		var clamp *common.QuotaClamp
+		actualQuota, clamp = customerDiscountQuota(actualQuota, bc.CustomerChannelDiscount)
+		clamps = append(clamps, clamp)
 	}
 	preConsumedQuota := task.Quota
 	quotaDelta := actualQuota - preConsumedQuota

@@ -32,6 +32,8 @@ import type {
   ManageUserAction,
   ManageUserQuotaPayload,
   ApiResponse,
+  CustomerChannelDiscountHistory,
+  CustomerChannelDiscountInput,
 } from './types'
 
 // A step-up proof is single-use, so the request carrying it must never be
@@ -101,6 +103,31 @@ export async function searchUsers(
 export async function getUser(id: number): Promise<ApiResponse<User>> {
   const res = await api.get(`/api/user/${id}`)
   return res.data
+}
+
+export async function getCustomerChannelDiscounts(
+  userId: number
+): Promise<CustomerChannelDiscountHistory> {
+  const res = await api.get<ApiResponse<CustomerChannelDiscountHistory>>(
+    `/api/user/${userId}/customer-channel-discounts`
+  )
+  const result = requireServerSuccess(res.data)
+  if (!result.data) throw new Error('Failed to load customer discounts')
+  return result.data
+}
+
+export async function updateCustomerChannelDiscounts(
+  userId: number,
+  expectedVersion: number,
+  rules: CustomerChannelDiscountInput[]
+): Promise<CustomerChannelDiscountHistory> {
+  const res = await api.put<ApiResponse<CustomerChannelDiscountHistory>>(
+    `/api/user/${userId}/customer-channel-discounts`,
+    { expected_version: expectedVersion, rules }
+  )
+  const result = requireServerSuccess(res.data)
+  if (!result.data) throw new Error('Failed to save customer discounts')
+  return result.data
 }
 
 /**

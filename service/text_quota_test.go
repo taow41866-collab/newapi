@@ -80,7 +80,7 @@ func TestFixedPriceBillingDatabaseMatrix(t *testing.T) {
 			model.DB, model.LOG_DB = db, logDB
 			common.SetDatabaseTypes(dialect.name, dialect.name)
 			t.Cleanup(func() { model.DB, model.LOG_DB = oldDB, oldLogDB; common.SetDatabaseTypes(oldMainType, oldLogType) })
-			require.NoError(t, db.AutoMigrate(&model.User{}, &model.Token{}, &model.Channel{}))
+			require.NoError(t, db.AutoMigrate(&model.User{}, &model.Token{}, &model.Channel{}, &model.Option{}))
 			require.NoError(t, logDB.AutoMigrate(&model.Log{}))
 			versionQuery := "select version()"
 			if dialect.name == common.DatabaseTypeSQLite {
@@ -112,6 +112,7 @@ func runFixedPriceAccountingCases(t *testing.T, db, logDB *gorm.DB) {
 		realtime, reserveInsufficient             bool
 		wallet, outboundImages                    int
 		groupRatio                                float64
+		discount                                  float64
 		want                                      int
 		unit                                      billingexpr.BillingUnit
 		requestedImages, actualImages             int
@@ -140,6 +141,14 @@ func runFixedPriceAccountingCases(t *testing.T, db, logDB *gorm.DB) {
 		{name: "image quantity exceeds one-image wallet before submission", expression: `tier("image", fixed(0.04)) * image_count`, requestedImages: 4, wallet: 20000, insufficient: true},
 		{name: "image override reserves extra quantity", expression: `tier("image", fixed(0.04)) * image_count`, requestedImages: 1, outboundImages: 4, want: 80000, unit: billingexpr.BillingUnitRequest},
 		{name: "image override cannot exceed remaining wallet", expression: `tier("image", fixed(0.04)) * image_count`, requestedImages: 1, outboundImages: 4, wallet: 40000, reserveInsufficient: true, refund: true},
+		{name: "customer discount includes expression and tool surcharge", expression: flat + ` * (param("fast") == true ? 2 : 1)`, groupRatio: 1.5, tool: true, discount: 0.5, want: 9000, unit: billingexpr.BillingUnitRequest},
+		{name: "customer discount cache stream", expression: imageExpression, estimate: 10000, usage: imageUsage, stream: true, discount: 0.5, want: 2057, unit: billingexpr.BillingUnitToken},
+		{name: "customer discount fixed images", expression: `tier("image", fixed(0.04)) * image_count`, requestedImages: 3, actualImages: 2, discount: 0.5, want: 20000, unit: billingexpr.BillingUnitRequest},
+		{name: "customer discount image override reserve once", expression: `tier("image", fixed(0.04)) * image_count`, requestedImages: 1, outboundImages: 4, discount: 0.5, want: 40000, unit: billingexpr.BillingUnitRequest},
+		{name: "customer discount audio", expression: flat, audio: true, usage: &dto.Usage{}, discount: 0.5, want: 2500, unit: billingexpr.BillingUnitRequest},
+		{name: "customer discount realtime", expression: imageExpression, estimate: 10000, usage: imageUsage, realtime: true, discount: 0.5, want: 2000, unit: billingexpr.BillingUnitToken},
+		{name: "customer discounted evaluation failure retains reservation", expression: `p == 50 ? tier("error", param("missing") * p + img_cr * 2) : tier("request", fixed(0.01))`, estimate: 100, usage: &dto.Usage{PromptTokens: 50, TotalTokens: 50}, discount: 0.5, want: 2500, unit: billingexpr.BillingUnitRequest},
+		{name: "customer discounted failure refunds exactly once", expression: flat, discount: 0.5, refund: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			quota := startingQuota
@@ -177,6 +186,11 @@ func runFixedPriceAccountingCases(t *testing.T, db, logDB *gorm.DB) {
 			snapshot.EstimatedImageCount = trace.ImageCount
 			info := &relaycommon.RelayInfo{UserId: user.Id, TokenId: token.Id, TokenKey: token.Key, ChannelMeta: &relaycommon.ChannelMeta{ChannelId: channel.Id}, OriginModelName: "fixed-test", UsingGroup: "default", UserGroup: "default", UserSetting: dto.UserSetting{BillingPreference: "wallet_only"}, ForcePreConsume: true, StartTime: time.Now(), IsStream: tc.stream, RelayFormat: types.RelayFormatOpenAI, PriceData: hosttypes.PriceData{GroupRatioInfo: hosttypes.GroupRatioInfo{GroupRatio: group}}, TieredBillingSnapshot: snapshot, BillingRequestInput: request}
 			info.SetEstimatePromptTokens(tc.estimate)
+			if tc.discount > 0 {
+				info.CustomerDiscountResolved = true
+				info.CustomerDiscountChannelID = channel.Id
+				info.CustomerChannelDiscount = &relaycommon.CustomerChannelDiscountSnapshot{UserID: user.Id, ChannelID: channel.Id, Model: "*", Multiplier: tc.discount, Version: 1, EffectiveAt: info.StartTime.UnixMilli()}
+			}
 			ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
 			ctx.Request = httptest.NewRequest("POST", "/v1/chat/completions", nil)
 			if tc.expression == imageExpression {
@@ -191,7 +205,7 @@ func runFixedPriceAccountingCases(t *testing.T, db, logDB *gorm.DB) {
 				require.Nil(t, apiErr)
 				held, err := model.GetUserQuota(user.Id, true)
 				require.NoError(t, err)
-				assert.Equal(t, quota-reservation, held)
+				assert.Equal(t, quota-ApplyCustomerChannelDiscount(info, reservation), held)
 				if tc.outboundImages > 0 {
 					reserveErr := PrepareImageBillingForRequest(ctx, info, tc.outboundImages)
 					if tc.reserveInsufficient {

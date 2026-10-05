@@ -336,6 +336,10 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 		if apiErr := service.PreConsumeBilling(c, info.PriceData.Quota, info); apiErr != nil {
 			return nil, service.TaskErrorFromAPIError(apiErr)
 		}
+	} else if info.Billing != nil {
+		if apiErr := service.ReserveCustomerChannelBilling(c, info, info.PriceData.Quota); apiErr != nil {
+			return nil, service.TaskErrorFromAPIError(apiErr)
+		}
 	}
 
 	// 8. 构建请求体
@@ -397,6 +401,7 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 		}
 	}
 
+	finalQuota = service.ApplyCustomerChannelDiscount(info, finalQuota)
 	info.PriceData.Quota = finalQuota
 
 	return &TaskSubmitResult{

@@ -18,7 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useQuery } from '@tanstack/react-query'
-import { Pencil } from 'lucide-react'
+import { Pencil, Percent } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
@@ -96,6 +96,7 @@ import {
   transformUserToFormDefaults,
 } from '../lib'
 import type { User } from '../types'
+import { CustomerChannelDiscountDialog } from './customer-channel-discount-dialog'
 import { UserQuotaDialog } from './user-quota-dialog'
 import { useUsers } from './users-provider'
 
@@ -116,6 +117,7 @@ export function UsersMutateDrawer({
   const currentUser = useAuthStore((s) => s.auth.user)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [quotaDialogOpen, setQuotaDialogOpen] = useState(false)
+  const [discountDialogOpen, setDiscountDialogOpen] = useState(false)
   // Matrix as loaded from the server; an unchanged matrix is not resubmitted so
   // routine edits of an administrator do not require step-up verification.
   const loadedPermissions = useRef<AdminPermissionMatrix | undefined>(undefined)
@@ -549,6 +551,19 @@ export function UsersMutateDrawer({
                   </SideDrawerSection>
                 )}
 
+              {isUpdate && canEditAdminPermissions && (
+                <SideDrawerSection>
+                  <Button
+                    type='button'
+                    variant='outline'
+                    onClick={() => setDiscountDialogOpen(true)}
+                  >
+                    <Percent data-icon='inline-start' />
+                    {t('Customer channel discounts')}
+                  </Button>
+                </SideDrawerSection>
+              )}
+
               {/* Binding Information (Read-only) */}
               {isUpdate && (
                 <SideDrawerSection>
@@ -600,6 +615,15 @@ export function UsersMutateDrawer({
           userId={currentRow.id}
           currentQuota={parseQuotaFromDollars(currentQuotaRaw || 0)}
           onSuccess={refreshUserData}
+        />
+      )}
+      {currentRow && discountDialogOpen && (
+        <CustomerChannelDiscountDialog
+          key={currentRow.id}
+          open={open && discountDialogOpen}
+          onOpenChange={setDiscountDialogOpen}
+          userId={currentRow.id}
+          username={currentRow.username}
         />
       )}
     </>

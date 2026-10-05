@@ -603,6 +603,7 @@ func TestAPITokenAuditDatabaseMatrix(t *testing.T) {
 				previousDB, previousLogDB := model.DB, model.LOG_DB
 				previousMain, previousLog := common.MainDatabaseType(), common.LogDatabaseType()
 				previousRedis, previousMaster, previousSecret := common.RedisEnabled, common.IsMasterNode, common.SessionSecret
+				previousLegacyRetireAt := model.LegacyAccessTokenRetireAt()
 				t.Cleanup(func() {
 					model.DB, model.LOG_DB = previousDB, previousLogDB
 					common.SetDatabaseTypes(previousMain, previousLog)
@@ -614,7 +615,13 @@ func TestAPITokenAuditDatabaseMatrix(t *testing.T) {
 				db, _ := newAuditTestDatabase(t, database.name, dsn)
 				model.DB = db
 				common.SetDatabaseTypes(database.typ, database.typ)
-				require.NoError(t, db.AutoMigrate(&model.User{}, &model.UserSession{}, &model.Token{}))
+				require.NoError(t, db.AutoMigrate(&model.User{}, &model.UserSession{}, &model.Token{}, &model.Option{}))
+				require.NoError(t, model.EnsureLegacyAccessTokenRetireAt(time.Now().Unix()))
+				t.Cleanup(func() {
+					// Zero is fail-closed; the initializer only accepts positive deadlines.
+					require.NoError(t, db.Model(&model.Option{}).Where(&model.Option{Key: "LegacyAccessTokenRetireAt"}).Update("value", strconv.FormatInt(max(previousLegacyRetireAt, 1), 10)).Error)
+					require.NoError(t, model.EnsureLegacyAccessTokenRetireAt(time.Now().Unix()))
+				})
 				// Initialize production column quoting as well as the existing audit table.
 				require.NoError(t, model.InitLogDB())
 				if separateLog {
