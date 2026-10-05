@@ -830,12 +830,19 @@ func (releasedAuditLog) TableName() string { return "logs" }
 // instance. They never drop databases or tables supplied through an environment variable.
 func newAuditTestDatabase(t *testing.T, kind, dsn string) (*gorm.DB, string) {
 	t.Helper()
+	return newAuditTestDatabaseWithImmediateSQLiteTransaction(t, kind, dsn, false)
+}
+
+func newAuditTestDatabaseWithImmediateSQLiteTransaction(t *testing.T, kind, dsn string, immediate bool) (*gorm.DB, string) {
+	t.Helper()
 	if kind == "sqlite" {
 		path := t.TempDir() + "/audit.db"
-		// Match the application's SQLite locking policy so concurrent security
-		// tests exercise transaction serialization instead of SQLITE_BUSY races.
-		dsn := path + "?_pragma=busy_timeout(30000)&_pragma=journal_mode(WAL)&_txlock=immediate"
-		db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
+		sqliteDSN := path + "?_pragma=busy_timeout(30000)&_pragma=journal_mode(WAL)"
+		if immediate {
+			// Match the application's SQLite locking policy for security mutations.
+			sqliteDSN += "&_txlock=immediate"
+		}
+		db, err := gorm.Open(sqlite.Open(sqliteDSN), &gorm.Config{})
 		require.NoError(t, err)
 		connection, err := db.DB()
 		require.NoError(t, err)
