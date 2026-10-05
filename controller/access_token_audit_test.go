@@ -834,7 +834,7 @@ func newAuditTestDatabase(t *testing.T, kind, dsn string) (*gorm.DB, string) {
 		path := t.TempDir() + "/audit.db"
 		// Match the application's SQLite locking policy so concurrent security
 		// tests exercise transaction serialization instead of SQLITE_BUSY races.
-		dsn := path + "?_pragma=busy_timeout(30000)&_pragma=journal_mode(WAL)"
+		dsn := path + "?_pragma=busy_timeout(30000)&_pragma=journal_mode(WAL)&_txlock=immediate"
 		db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
 		require.NoError(t, err)
 		connection, err := db.DB()
