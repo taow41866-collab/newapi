@@ -143,6 +143,13 @@ func TestAccessTokenRouteRulesCoverEveryDashboardRoute(t *testing.T) {
 	}
 }
 
+func TestRevenuePriceAppendRouteRequiresOptionWriteScope(t *testing.T) {
+	rule, ok := middleware.AccessTokenRouteRule("POST /api/revenue/prices/rules")
+	require.True(t, ok)
+	assert.Equal(t, "scope", rule.Kind())
+	assert.Equal(t, "option:write", rule.Scope())
+}
+
 func TestAccessTokenCatalogCoversEveryPermission(t *testing.T) {
 	catalog := service.AccessTokenCatalog(1, common.RoleRootUser)
 	scopes := map[string]bool{}
