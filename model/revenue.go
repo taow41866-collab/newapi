@@ -5,14 +5,23 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 const PurchasePricesOption = "RevenuePurchasePrices"
+
+var purchasePriceRulesMutex sync.Mutex
+
+var ErrPurchasePriceHistoryImmutable = errors.New("purchase price history cannot be modified or removed")
 
 type PurchasePrice struct {
 	ChannelID       int      `json:"channel_id"`
@@ -35,6 +44,9 @@ func ValidatePurchasePrices(rules []PurchasePrice) error {
 	for _, r := range rules {
 		if r.ChannelID <= 0 || strings.TrimSpace(r.Model) == "" || strings.TrimSpace(r.Source) == "" || len(r.Model) > 255 || len(r.Source) > 500 || r.EffectiveAt < 0 {
 			return errors.New("channel, exact model, effective time and source are required")
+		}
+		if r.Model == "*" && r.Unit != "model_multiplier" {
+			return errors.New("channel defaults only support model cost multipliers")
 		}
 		key := fmt.Sprintf("%d/%s/%d", r.ChannelID, r.Model, r.EffectiveAt)
 		if seen[key] {
@@ -78,6 +90,106 @@ func GetPurchasePriceRules(ctx context.Context) ([]PurchasePrice, error) {
 		}
 	}
 	return rules, ValidatePurchasePrices(rules)
+}
+
+// AppendPurchasePriceRule adds one effective-dated rule without replacing
+// concurrent updates to the shared rule list.
+func AppendPurchasePriceRule(ctx context.Context, rule PurchasePrice) ([]PurchasePrice, error) {
+	rule.EffectiveAt = 0
+	if err := ValidatePurchasePrices([]PurchasePrice{rule}); err != nil {
+		return nil, err
+	}
+	return persistPurchasePriceRules(ctx, []PurchasePrice{rule}, true)
+}
+
+// AppendPurchasePriceRules accepts the legacy full-list payload but only
+// appends new future-effective rules; saved history is immutable.
+func AppendPurchasePriceRules(ctx context.Context, submitted []PurchasePrice) ([]PurchasePrice, error) {
+	if err := ValidatePurchasePrices(submitted); err != nil {
+		return nil, err
+	}
+	return persistPurchasePriceRules(ctx, submitted, false)
+}
+
+func persistPurchasePriceRules(ctx context.Context, submitted []PurchasePrice, assignEffectiveTime bool) ([]PurchasePrice, error) {
+	purchasePriceRulesMutex.Lock()
+	defer purchasePriceRulesMutex.Unlock()
+
+	var rules []PurchasePrice
+	var serialized string
+	err := DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		option := Option{Key: PurchasePricesOption}
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).FirstOrCreate(&option, Option{Key: PurchasePricesOption}).Error; err != nil {
+			return err
+		}
+		if option.Value != "" {
+			if err := common.UnmarshalJsonStr(option.Value, &rules); err != nil {
+				return err
+			}
+		}
+		if err := ValidatePurchasePrices(rules); err != nil {
+			return err
+		}
+
+		if assignEffectiveTime {
+			rule := submitted[0]
+			rule.EffectiveAt = time.Now().Unix()
+			for _, existing := range rules {
+				if existing.ChannelID == rule.ChannelID && existing.Model == rule.Model && existing.EffectiveAt >= rule.EffectiveAt {
+					rule.EffectiveAt = existing.EffectiveAt + 1
+				}
+			}
+			rules = append(rules, rule)
+		} else {
+			desired := make(map[string]PurchasePrice, len(submitted))
+			for _, rule := range submitted {
+				desired[purchasePriceRuleKey(rule)] = rule
+			}
+			for _, existing := range rules {
+				key := purchasePriceRuleKey(existing)
+				desiredRule, ok := desired[key]
+				if !ok || !reflect.DeepEqual(existing, desiredRule) {
+					return ErrPurchasePriceHistoryImmutable
+				}
+				delete(desired, key)
+			}
+			now := time.Now().Unix()
+			for _, rule := range submitted {
+				if _, isNew := desired[purchasePriceRuleKey(rule)]; !isNew {
+					continue
+				}
+				if rule.EffectiveAt < now {
+					rule.EffectiveAt = now
+				}
+				for _, existing := range rules {
+					if existing.ChannelID == rule.ChannelID && existing.Model == rule.Model && existing.EffectiveAt >= rule.EffectiveAt {
+						rule.EffectiveAt = existing.EffectiveAt + 1
+					}
+				}
+				rules = append(rules, rule)
+			}
+		}
+		if err := ValidatePurchasePrices(rules); err != nil {
+			return err
+		}
+		data, err := common.Marshal(rules)
+		if err != nil {
+			return err
+		}
+		serialized = string(data)
+		return tx.Model(&option).Update("value", serialized).Error
+	})
+	if err != nil {
+		return nil, err
+	}
+	if err := updateOptionMap(PurchasePricesOption, serialized); err != nil {
+		return nil, err
+	}
+	return rules, nil
+}
+
+func purchasePriceRuleKey(rule PurchasePrice) string {
+	return fmt.Sprintf("%d/%s/%d", rule.ChannelID, rule.Model, rule.EffectiveAt)
 }
 
 type RevenueRow struct {
@@ -244,24 +356,34 @@ func CalculateRevenue(logs []Log, rules []PurchasePrice, tasks map[string]Task, 
 }
 
 func findPurchasePriceRule(rules []PurchasePrice, channelID int, modelName string, createdAt int64) *PurchasePrice {
-	var exact, estimate *PurchasePrice
+	var exact, modelEstimate, defaultEstimate *PurchasePrice
 	for i := range rules {
 		rule := &rules[i]
-		if rule.ChannelID != channelID || rule.Model != modelName || rule.EffectiveAt > createdAt {
+		if rule.ChannelID != channelID || rule.EffectiveAt > createdAt {
 			continue
 		}
 		if rule.Unit == "model_multiplier" {
-			if estimate == nil || rule.EffectiveAt > estimate.EffectiveAt {
-				estimate = rule
+			switch rule.Model {
+			case modelName:
+				if modelEstimate == nil || rule.EffectiveAt > modelEstimate.EffectiveAt {
+					modelEstimate = rule
+				}
+			case "*":
+				if defaultEstimate == nil || rule.EffectiveAt > defaultEstimate.EffectiveAt {
+					defaultEstimate = rule
+				}
 			}
-		} else if exact == nil || rule.EffectiveAt > exact.EffectiveAt {
+		} else if rule.Model == modelName && (exact == nil || rule.EffectiveAt > exact.EffectiveAt) {
 			exact = rule
 		}
 	}
 	if exact != nil {
 		return exact
 	}
-	return estimate
+	if modelEstimate != nil {
+		return modelEstimate
+	}
+	return defaultEstimate
 }
 
 func purchaseCost(l Log, m revenueMetadata, r *PurchasePrice, quotaPerUnit float64) (float64, bool) {
@@ -329,13 +451,17 @@ func purchaseCost(l Log, m revenueMetadata, r *PurchasePrice, quotaPerUnit float
 	return cost, !math.IsNaN(cost) && !math.IsInf(cost, 0) && cost >= 0
 }
 
-func GetRevenue(ctx context.Context, start, end int64) (RevenueReport, error) {
+func GetRevenue(ctx context.Context, start, end int64, username string) (RevenueReport, error) {
 	rules, err := GetPurchasePriceRules(ctx)
 	if err != nil {
 		return RevenueReport{}, err
 	}
 	var logs []Log
-	err = LOG_DB.WithContext(ctx).Select("created_at,type,quota,prompt_tokens,completion_tokens,channel_id,model_name,user_id,other").Where("created_at >= ? AND created_at <= ? AND type IN ?", start, end, []int{LogTypeConsume, LogTypeRefund}).Order("created_at ASC").Limit(50001).Find(&logs).Error
+	query := LOG_DB.WithContext(ctx).Select("created_at,type,quota,prompt_tokens,completion_tokens,channel_id,model_name,user_id,username,other").Where("created_at >= ? AND created_at <= ? AND type IN ?", start, end, []int{LogTypeConsume, LogTypeRefund})
+	if username != "" {
+		query = query.Where("username = ?", username)
+	}
+	err = query.Order("created_at ASC").Limit(50001).Find(&logs).Error
 	if err != nil {
 		return RevenueReport{}, err
 	}

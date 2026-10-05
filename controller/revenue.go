@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strconv"
 	"time"
@@ -20,7 +21,7 @@ func GetRevenueReport(c *gin.Context) {
 	}
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 15*time.Second)
 	defer cancel()
-	report, err := model.GetRevenue(ctx, start, end)
+	report, err := model.GetRevenue(ctx, start, end, c.Query("username"))
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -48,14 +49,32 @@ func UpdatePurchasePrices(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": err.Error()})
 		return
 	}
-	data, err := common.Marshal(request.Rules)
-	if err != nil {
-		common.ApiError(c, err)
-		return
-	}
-	if err := model.UpdateOptionsBulk(map[string]string{model.PurchasePricesOption: string(data)}); err != nil {
+	if _, err := model.AppendPurchasePriceRules(c.Request.Context(), request.Rules); err != nil {
+		if errors.Is(err, model.ErrPurchasePriceHistoryImmutable) {
+			c.JSON(http.StatusConflict, gin.H{"success": false, "message": err.Error()})
+			return
+		}
 		common.ApiError(c, err)
 		return
 	}
 	common.ApiSuccess(c, nil)
+}
+
+func AppendPurchasePrice(c *gin.Context) {
+	var rule model.PurchasePrice
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 64*1024)
+	if err := common.DecodeJson(c.Request.Body, &rule); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "Invalid purchase price rule"})
+		return
+	}
+	if err := model.ValidatePurchasePrices([]model.PurchasePrice{rule}); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": err.Error()})
+		return
+	}
+	rules, err := model.AppendPurchasePriceRule(c.Request.Context(), rule)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	common.ApiSuccess(c, rules[len(rules)-1])
 }

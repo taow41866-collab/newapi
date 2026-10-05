@@ -238,6 +238,7 @@ import {
   ChannelConfiguration,
   ChannelConfigurationStatusIndicator,
 } from './channel-configuration'
+import { ChannelCostConfiguration } from './channel-cost-configuration'
 import { ChannelProviderPicker } from './channel-provider-picker'
 import {
   ChannelApiAccessSection,
@@ -408,6 +409,7 @@ export function ChannelMutateDrawer({
   const queryClient = useQueryClient()
   const { setOpen } = useChannels()
   const currentUser = useAuthStore((s) => s.auth.user)
+  const isRoot = currentUser?.role === ROLE.SUPER_ADMIN
   const canEditSensitive = hasPermission(
     currentUser,
     ADMIN_PERMISSION_RESOURCES.CHANNEL,
@@ -4694,6 +4696,9 @@ export function ChannelMutateDrawer({
             </div>
             {upstreamModelDetectionFields}
             {notesFields}
+            {isEditing && isRoot && channelId ? (
+              <ChannelCostConfiguration channelId={channelId} />
+            ) : null}
           </>
         }
       />

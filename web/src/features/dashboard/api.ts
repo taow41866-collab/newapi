@@ -45,31 +45,15 @@ export interface RevenueReport {
   uncovered_entries: number
 }
 
-export interface PurchasePriceRule {
-  channel_id: number
-  model: string
-  unit: 'tokens' | 'request' | 'image' | 'second' | 'model_multiplier'
-  unit_price?: number
-  input_price?: number
-  output_price?: number
-  cache_price?: number
-  cache_write_price?: number
-  effective_at: number
-  source: string
-}
-
-export async function getPurchasePrices() {
-  const res = await api.get<{ success: boolean; data: PurchasePriceRule[] }>('/api/revenue/prices')
-  return requireServerSuccess(res.data)
-}
-
-export async function updatePurchasePrices(rules: PurchasePriceRule[]) {
-  const res = await api.put<{ success: boolean }>('/api/revenue/prices', { rules })
-  return requireServerSuccess(res.data)
-}
-
-export async function getRevenueReport(params: { start_timestamp: number; end_timestamp: number }) {
-  const res = await api.get<{ success: boolean; data: RevenueReport }>('/api/revenue', { params })
+export async function getRevenueReport(params: {
+  start_timestamp: number
+  end_timestamp: number
+  username?: string
+}) {
+  const res = await api.get<{ success: boolean; data: RevenueReport }>(
+    '/api/revenue',
+    { params }
+  )
   return requireServerSuccess(res.data)
 }
 

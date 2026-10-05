@@ -16,12 +16,13 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import { BadgePercent, CircleDollarSign, Coins, TrendingUp } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { IconBadge } from '@/components/ui/icon-badge'
 import { Skeleton } from '@/components/ui/skeleton'
-import { getUserQuotaDates } from '@/features/dashboard/api'
+import { getRevenueReport, getUserQuotaDates } from '@/features/dashboard/api'
 import { useModelStatCardsConfig } from '@/features/dashboard/hooks/use-dashboard-config'
 import {
   buildQueryParams,
@@ -33,6 +34,7 @@ import type {
   DashboardFilters,
 } from '@/features/dashboard/types'
 import { toIntlLocale } from '@/i18n/languages'
+import { formatBillingCurrencyFromUSD } from '@/lib/currency'
 import { formatCompactNumber, formatNumber, formatQuota } from '@/lib/format'
 import { computeTimeRange } from '@/lib/time'
 import { cn } from '@/lib/utils'
@@ -59,7 +61,7 @@ function formatStatNumber(value: number, locale: Intl.LocalesArgument) {
 }
 
 export function LogStatCards(props: LogStatCardsProps) {
-  const { i18n } = useTranslation()
+  const { t, i18n } = useTranslation()
   const statCardsConfig = useModelStatCardsConfig()
   const user = useAuthStore((state) => state.auth.user)
   const isAdmin = !!(user?.role && user.role >= 10)
@@ -70,6 +72,13 @@ export function LogStatCards(props: LogStatCardsProps) {
   } | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(false)
+  const [revenueState, setRevenueState] = useState<
+    | { status: 'hidden' | 'loading' | 'error' | 'range' }
+    | {
+        status: 'ready'
+        report: Awaited<ReturnType<typeof getRevenueReport>>['data']
+      }
+  >({ status: isAdmin ? 'loading' : 'hidden' })
 
   const [timeRangeMinutes, setTimeRangeMinutes] = useState(0)
 
@@ -115,6 +124,38 @@ export function LogStatCards(props: LogStatCardsProps) {
     }
   }, [filters, isAdmin, onDataUpdate])
 
+  useEffect(() => {
+    if (!isAdmin) {
+      setRevenueState({ status: 'hidden' })
+      return
+    }
+    const range = computeTimeRange(
+      getDefaultDays(filters?.time_granularity),
+      filters?.start_timestamp,
+      filters?.end_timestamp
+    )
+    if (range.end_timestamp - range.start_timestamp > 31 * 86400) {
+      setRevenueState({ status: 'range' })
+      return
+    }
+
+    let cancelled = false
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setRevenueState({ status: 'loading' })
+    void getRevenueReport({ ...range, username: filters?.username })
+      .then((result) => {
+        if (!cancelled) {
+          setRevenueState({ status: 'ready', report: result.data })
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setRevenueState({ status: 'error' })
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [filters, isAdmin])
+
   const adaptedStats = {
     rpm: stats?.totalCount ?? 0,
     quota: stats?.totalQuota ?? 0,
@@ -133,29 +174,139 @@ export function LogStatCards(props: LogStatCardsProps) {
         : formatStatNumber(rawValue, locale)
 
     return {
+      key: config.key,
       title: config.title,
       value: formatted.displayValue,
       fullValue: formatted.fullValue,
       desc: config.description,
       icon: config.icon,
       iconTone: config.iconTone,
+      loading,
+      error,
     }
   })
 
+  const revenueReport =
+    revenueState.status === 'ready' ? revenueState.report : undefined
+  const locale = toIntlLocale(i18n.resolvedLanguage || i18n.language)
+  let revenueStatusText = t('Estimated from configured channel costs')
+  if (revenueState.status === 'range') {
+    revenueStatusText = t('Select a period of 31 days or less')
+  } else if (revenueState.status === 'error') {
+    revenueStatusText = t('Unable to load revenue')
+  }
+  const revenueUnavailable =
+    revenueState.status === 'range' || revenueState.status === 'error'
+  const netSalesValue = revenueReport
+    ? formatBillingCurrencyFromUSD(revenueReport.net_sales)
+    : '--'
+  const knownCostValue = revenueReport
+    ? formatBillingCurrencyFromUSD(revenueReport.known_cost)
+    : '--'
+  let grossProfitValue = t('Unknown')
+  if (revenueReport?.gross_profit != null) {
+    grossProfitValue = formatBillingCurrencyFromUSD(revenueReport.gross_profit)
+  }
+  let grossMarginValue = t('Unknown')
+  if (revenueReport?.gross_margin_rate != null) {
+    grossMarginValue = new Intl.NumberFormat(locale, {
+      style: 'percent',
+      maximumFractionDigits: 2,
+    }).format(revenueReport.gross_margin_rate)
+  }
+  let knownCostDescription = revenueStatusText
+  if (!revenueUnavailable && revenueReport) {
+    knownCostDescription = t('{{count}} entries uncovered', {
+      count: revenueReport.uncovered_entries,
+    })
+  }
+  let grossProfitDescription = revenueStatusText
+  if (!revenueUnavailable && revenueReport?.gross_profit != null) {
+    grossProfitDescription = t('Shown only when all costs are covered')
+  } else if (!revenueUnavailable && revenueReport) {
+    grossProfitDescription = t('Incomplete cost data')
+  }
+  let grossMarginDescription = revenueStatusText
+  if (!revenueUnavailable && revenueReport?.gross_margin_rate != null) {
+    grossMarginDescription = t('Estimated from configured channel costs')
+  } else if (!revenueUnavailable && revenueReport) {
+    grossMarginDescription = t('Incomplete cost data')
+  }
+  const revenueItems =
+    revenueState.status === 'hidden'
+      ? []
+      : [
+          {
+            key: 'revenue',
+            title: t('Net sales'),
+            value: netSalesValue,
+            fullValue: netSalesValue,
+            desc: revenueUnavailable
+              ? revenueStatusText
+              : t('Net sales for selected period'),
+            icon: CircleDollarSign,
+            iconTone: 'success' as const,
+            loading: revenueState.status === 'loading',
+            error:
+              revenueState.status === 'error' ||
+              revenueState.status === 'range',
+          },
+          {
+            key: 'knownCost',
+            title: t('Known cost'),
+            value: knownCostValue,
+            fullValue: knownCostValue,
+            desc: knownCostDescription,
+            icon: Coins,
+            iconTone: 'warning' as const,
+            loading: revenueState.status === 'loading',
+            error:
+              revenueState.status === 'error' ||
+              revenueState.status === 'range',
+          },
+          {
+            key: 'grossProfit',
+            title: t('Estimated gross profit'),
+            value: grossProfitValue,
+            fullValue: grossProfitValue,
+            desc: grossProfitDescription,
+            icon: TrendingUp,
+            iconTone: 'chart-2' as const,
+            loading: revenueState.status === 'loading',
+            error:
+              revenueState.status === 'error' ||
+              revenueState.status === 'range',
+          },
+          {
+            key: 'grossMargin',
+            title: t('Gross margin'),
+            value: grossMarginValue,
+            fullValue: grossMarginValue,
+            desc: grossMarginDescription,
+            icon: BadgePercent,
+            iconTone: 'chart-4' as const,
+            loading: revenueState.status === 'loading',
+            error:
+              revenueState.status === 'error' ||
+              revenueState.status === 'range',
+          },
+        ]
+  const allItems = [...items, ...revenueItems]
+
   return (
     <div className='overflow-hidden rounded-lg border'>
-      <div className='divide-border/60 grid min-w-0 grid-cols-2 divide-x sm:grid-cols-3 lg:grid-cols-5'>
-        {items.map((it, idx) => {
+      <div className='divide-border/60 grid min-w-0 grid-cols-2 divide-x sm:grid-cols-3 lg:grid-cols-5 2xl:grid-cols-9'>
+        {allItems.map((it, idx) => {
           const Icon = it.icon
           let valueContent
-          if (loading) {
+          if (it.loading) {
             valueContent = (
               <div className='mt-1 flex flex-col gap-1 sm:mt-2 sm:gap-1.5'>
                 <Skeleton className='h-5 w-16 sm:h-7 sm:w-20' />
                 <Skeleton className='hidden h-3.5 w-28 md:block' />
               </div>
             )
-          } else if (error) {
+          } else if (it.error) {
             valueContent = (
               <>
                 <div className='text-muted-foreground mt-1 font-mono text-base leading-tight font-bold tracking-tight tabular-nums sm:mt-2 sm:text-2xl sm:leading-normal'>

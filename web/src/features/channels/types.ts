@@ -75,6 +75,19 @@ export const channelSchema = z.object({
 
 export type Channel = z.infer<typeof channelSchema>
 
+export interface PurchasePriceRule {
+  channel_id: number
+  model: string
+  unit: 'tokens' | 'request' | 'image' | 'second' | 'model_multiplier'
+  unit_price?: number
+  input_price?: number
+  output_price?: number
+  cache_price?: number
+  cache_write_price?: number
+  effective_at: number
+  source: string
+}
+
 // ============================================================================
 // Channel Settings Types
 // ============================================================================

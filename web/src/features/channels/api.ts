@@ -37,6 +37,7 @@ import type {
   GetChannelsResponse,
   MultiKeyManageParams,
   MultiKeyStatusResponse,
+  PurchasePriceRule,
   SearchChannelsParams,
   SearchChannelsResponse,
   TagOperationParams,
@@ -139,6 +140,27 @@ export async function searchChannels(
 export async function getChannel(id: number): Promise<GetChannelResponse> {
   const res = await api.get(`/api/channel/${id}`)
   return res.data
+}
+
+export async function getPurchasePrices(): Promise<{
+  success: boolean
+  data: PurchasePriceRule[]
+}> {
+  const response = await api.get<{
+    success: boolean
+    data: PurchasePriceRule[]
+  }>('/api/revenue/prices')
+  return requireServerSuccess(response.data)
+}
+
+export async function appendPurchasePriceRule(
+  rule: PurchasePriceRule
+): Promise<{ success: boolean; data: PurchasePriceRule }> {
+  const response = await api.post<{
+    success: boolean
+    data: PurchasePriceRule
+  }>('/api/revenue/prices/rules', rule, channelActionConfig())
+  return requireServerSuccess(response.data)
 }
 
 /**

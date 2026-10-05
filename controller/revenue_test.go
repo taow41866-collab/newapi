@@ -2,6 +2,7 @@ package controller
 
 import (
 	"testing"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
@@ -63,6 +64,9 @@ func TestValidateRevenuePricesRejectsInvalidAmountsAndMissingSource(t *testing.T
 	assert.Error(t, model.ValidatePurchasePrices([]model.PurchasePrice{invalid}))
 	invalid = valid
 	invalid.Source = ""
+	assert.Error(t, model.ValidatePurchasePrices([]model.PurchasePrice{invalid}))
+	invalid = valid
+	invalid.Model = "*"
 	assert.Error(t, model.ValidatePurchasePrices([]model.PurchasePrice{invalid}))
 }
 
@@ -144,12 +148,96 @@ func TestCalculateRevenuePrefersExactPurchasePriceToMultiplier(t *testing.T) {
 	assert.Equal(t, int64(0), report.EstimatedCostEntries)
 }
 
+func TestCalculateRevenueUsesChannelDefaultMultiplierWithModelOverride(t *testing.T) {
+	logs := []model.Log{
+		{CreatedAt: 100, Type: model.LogTypeConsume, ChannelId: 7, ModelName: "gpt-a", UserId: 1, Quota: 2000, PromptTokens: 1000, CompletionTokens: 500, Other: `{"model_ratio":1,"completion_ratio":3}`},
+		{CreatedAt: 100, Type: model.LogTypeConsume, ChannelId: 7, ModelName: "gpt-b", UserId: 1, Quota: 2000, PromptTokens: 1000, CompletionTokens: 500, Other: `{"model_ratio":1,"completion_ratio":3}`},
+	}
+	rules := []model.PurchasePrice{
+		{ChannelID: 7, Model: "*", EffectiveAt: 0, Unit: "model_multiplier", UnitPrice: ptr(0.5), Source: "channel default"},
+		{ChannelID: 7, Model: "gpt-a", EffectiveAt: 0, Unit: "model_multiplier", UnitPrice: ptr(0.25), Source: "model override"},
+	}
+
+	report := model.CalculateRevenue(logs, rules, nil, 1000)
+
+	require.Len(t, report.Rows, 2)
+	assert.InDelta(t, 0.625, report.Rows[0].KnownCost, 1e-10)
+	assert.InDelta(t, 1.25, report.Rows[1].KnownCost, 1e-10)
+}
+
 func TestGetRevenueReportReadsLogDBAndRejectsOversizedRange(t *testing.T) {
 	db := setupRevenueControllerTestDB(t)
 	require.NoError(t, db.Create(&[]model.Log{{CreatedAt: 100, Type: model.LogTypeConsume, ChannelId: 7, ModelName: "gpt-test", Quota: 1000}, {CreatedAt: 101, Type: model.LogTypeRefund, ChannelId: 7, ModelName: "gpt-test", Quota: 200}}).Error)
-	report, err := model.GetRevenue(t.Context(), 0, 200)
+	report, err := model.GetRevenue(t.Context(), 0, 200, "")
 	require.NoError(t, err)
 	assert.Equal(t, float64(8), report.NetSales)
+}
+
+func TestGetRevenueReportAppliesUsernameFilter(t *testing.T) {
+	db := setupRevenueControllerTestDB(t)
+	require.NoError(t, db.Create(&[]model.Log{
+		{CreatedAt: 150, Type: model.LogTypeConsume, ChannelId: 7, ModelName: "gpt-test", Username: "selected", Quota: 1000},
+		{CreatedAt: 150, Type: model.LogTypeConsume, ChannelId: 7, ModelName: "gpt-test", Username: "other", Quota: 9000},
+	}).Error)
+
+	report, err := model.GetRevenue(t.Context(), 100, 200, "selected")
+	require.NoError(t, err)
+	assert.Equal(t, float64(10), report.NetSales)
+}
+
+func TestAppendPurchasePriceRulePreservesExistingRulesAndUsesServerEffectiveTime(t *testing.T) {
+	setupRevenueControllerTestDB(t)
+	existing := []model.PurchasePrice{
+		{ChannelID: 7, Model: "gpt-test", EffectiveAt: 1, Unit: "model_multiplier", UnitPrice: ptr(0.5), Source: "old"},
+		{ChannelID: 9, Model: "other-model", EffectiveAt: 2, Unit: "image", UnitPrice: ptr(0.06), Source: "other channel"},
+	}
+	encoded, err := common.Marshal(existing)
+	require.NoError(t, err)
+	require.NoError(t, model.UpdateOptionsBulk(map[string]string{model.PurchasePricesOption: string(encoded)}))
+
+	added, err := model.AppendPurchasePriceRule(t.Context(), model.PurchasePrice{
+		ChannelID: 7, Model: "gpt-test", Unit: "model_multiplier", UnitPrice: ptr(0.75), Source: "new estimate",
+	})
+	require.NoError(t, err)
+	require.Len(t, added, 3)
+	assert.Equal(t, existing, added[:2])
+	assert.GreaterOrEqual(t, added[2].EffectiveAt, int64(1_790_000_000))
+	assert.Equal(t, int64(2), added[1].EffectiveAt)
+
+	stored, err := model.GetPurchasePriceRules(t.Context())
+	require.NoError(t, err)
+	assert.Equal(t, added, stored)
+}
+
+func TestAppendPurchasePriceRulesRejectsEditingOrRemovingSavedHistory(t *testing.T) {
+	setupRevenueControllerTestDB(t)
+	existing := []model.PurchasePrice{{
+		ChannelID: 7, Model: "gpt-test", EffectiveAt: 1,
+		Unit: "model_multiplier", UnitPrice: ptr(0.5), Source: "saved quote",
+	}}
+	encoded, err := common.Marshal(existing)
+	require.NoError(t, err)
+	require.NoError(t, model.UpdateOptionsBulk(map[string]string{model.PurchasePricesOption: string(encoded)}))
+
+	_, err = model.AppendPurchasePriceRules(t.Context(), nil)
+	assert.ErrorIs(t, err, model.ErrPurchasePriceHistoryImmutable)
+
+	modified := append([]model.PurchasePrice(nil), existing...)
+	modified[0].UnitPrice = ptr(0.25)
+	_, err = model.AppendPurchasePriceRules(t.Context(), modified)
+	assert.ErrorIs(t, err, model.ErrPurchasePriceHistoryImmutable)
+
+	stored, err := model.GetPurchasePriceRules(t.Context())
+	require.NoError(t, err)
+	assert.Equal(t, existing, stored)
+
+	addition := model.PurchasePrice{
+		ChannelID: 7, Model: "gpt-test", EffectiveAt: time.Now().Unix() + 60,
+		Unit: "model_multiplier", UnitPrice: ptr(0.75), Source: "new estimate",
+	}
+	updated, err := model.AppendPurchasePriceRules(t.Context(), append(existing, addition))
+	require.NoError(t, err)
+	assert.Equal(t, append(existing, addition), updated)
 }
 
 func ptr(value float64) *float64 { return &value }

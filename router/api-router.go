@@ -327,6 +327,7 @@ func SetApiRouter(router *gin.Engine) {
 		apiRouter.GET("/revenue", middleware.AdminAuth(), controller.GetRevenueReport)
 		apiRouter.GET("/revenue/prices", middleware.RootAuth(), controller.GetPurchasePrices)
 		apiRouter.PUT("/revenue/prices", middleware.RootAuth(), controller.UpdatePurchasePrices)
+		apiRouter.POST("/revenue/prices/rules", middleware.RootAuth(), controller.AppendPurchasePrice)
 		logRoute.GET("/self/stat", middleware.UserAuth(), controller.GetLogsSelfStat)
 		logRoute.GET("/channel_affinity_usage_cache", middleware.AdminAuth(), controller.GetChannelAffinityUsageCacheStats)
 		logRoute.GET("/search", middleware.AdminAuth(), controller.SearchAllLogs)
