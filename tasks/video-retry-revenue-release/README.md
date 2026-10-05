@@ -59,7 +59,7 @@
 在服务器执行：
 
 ```sh
-python3 /tmp/deploy-revenue-video.py rollback \
+python3 /srv/new-api/releases/revenue-video-ecd287cf9593/deploy.py rollback \
   ghcr.io/taow41866-collab/new-api@sha256:7557417128adfeca4852bb121e5fb97878d58c720d99ae8f44b452c8705c5e66 \
   ecd287cf959348f8b47fc11788f9bf075932d766
 ```
@@ -70,3 +70,4 @@ python3 /tmp/deploy-revenue-video.py rollback \
 
 - 三数据库完整矩阵和一小时持续观测未在本次发布中完成；CI 的 MySQL/PostgreSQL 相关门禁通过，但本机 Windows 全仓测试不作为 Linux 生产证据。
 - 采购价格必须由 Root 配置；缺规则的行只能显示销售额，毛利显示为不完整。
+- 发布后首小时已设置本聊天的 15 分钟只读巡检，结束后暂停；设置巡检不等于一小时观测已经完成。
