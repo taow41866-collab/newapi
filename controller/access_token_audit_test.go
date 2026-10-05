@@ -1080,10 +1080,23 @@ func TestAuditDatabaseMatrix(t *testing.T) {
 						require.NoError(t, db.Create(&releasedAuditUser{Username: "released-owner", Password: "placeholder", AccessToken: &legacy, AffCode: "released-aff", Quota: 1234}).Error)
 						require.NoError(t, db.Create(&releasedAuditLog{UserId: 1, Type: model.LogTypeLogin, Content: "historical login", CreatedAt: 100, RequestId: "legacy-request"}).Error)
 					}
+					var activeDB *gorm.DB
 					for range 2 {
 						require.NoError(t, model.InitDB())
+						if activeDB != nil {
+							connection, err := activeDB.DB()
+							require.NoError(t, err)
+							require.NoError(t, connection.Close())
+						}
+						activeDB = model.DB
 						require.NoError(t, model.InitLogDB())
 					}
+					t.Cleanup(func() {
+						connection, err := activeDB.DB()
+						if err == nil {
+							require.NoError(t, connection.Close())
+						}
+					})
 					if !upgrade {
 						require.NoError(t, db.Create(&model.User{Username: "fresh-owner", Password: "placeholder", AffCode: "fresh-aff"}).Error)
 					}
