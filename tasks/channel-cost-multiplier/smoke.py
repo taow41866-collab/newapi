@@ -9,7 +9,7 @@ import time
 import urllib.error
 import urllib.request
 
-deploy = runpy.run_path('/tmp/deploy-revenue-video.py')
+deploy = runpy.run_path('/tmp/deploy-channel-cost.py')
 run, sql, inspect = [deploy[key] for key in ('run', 'sql', 'inspect')]
 root, image, revision = [deploy[key] for key in ('root', 'image', 'revision')]
 clone = json.loads((root / 'backup.json').read_text())['restored_database']

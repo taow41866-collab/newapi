@@ -39,6 +39,7 @@ Root 在渠道编辑页维护上游成本规则；管理员在模型数据统计
 - 两个独立进程并发首次追加通过：SQLite 3.50.4、MySQL 8.0.46、PostgreSQL 16.15；两条规则均保留且生效时间递增。WSL 的 Go 工具链下载超时，采用 Windows 交叉编译 Linux 测试二进制，临时账号和数据库清理完成。
 - 当前定向 Go 测试、`go vet ./model ./controller`、路由权限测试通过；3 个前端测试文件 9 项通过，`bun run typecheck` 通过。最终 Linux 全量 CI 仍须以新增提交结果为准。
 - 发布脚本复用现有 Canvas 文件，仅更新镜像内 New API 前端与后端；隔离恢复库验证 Root 追加、管理员拒绝写入、历史不可覆盖和无效规则拒绝，不写生产采购价、不调用付费上游。
+- 修复提交 `901ac68201a52a57e2b1d6d9b2d4931041b2ff99` 的首次 CI `37287838213` 前端全绿，后端在既有 `TestSecurityAccountDeletionConcurrentRequestsHaveOneWinner` 遇到 SQLite 锁冲突；Linux 单独复核该测试通过。没有绕过门禁。发布前另修正隔离验收脚本导入路径为 `/tmp/deploy-channel-cost.py`，最终提交需重新获得 CI 和镜像证据。
 
 ## 发布门禁
 
