@@ -75,3 +75,39 @@ func TestGetRevenueReportReadsLogDBAndRejectsOversizedRange(t *testing.T) {
 }
 
 func ptr(value float64) *float64 { return &value }
+
+func TestRevenueUsageAndPendingTaskCosts(t *testing.T) {
+	cases := []struct {
+		name    string
+		log     model.Log
+		rule    model.PurchasePrice
+		tasks   map[string]model.Task
+		cost    float64
+		unknown int64
+		pending int64
+	}{
+		{name: "tokens", log: model.Log{PromptTokens: 1000000, CompletionTokens: 500000}, rule: model.PurchasePrice{Unit: "tokens", InputPrice: ptr(2), OutputPrice: ptr(4)}, cost: 4},
+		{name: "image count", log: model.Log{Other: `{"image_count":2}`}, rule: model.PurchasePrice{Unit: "image", UnitPrice: ptr(.01)}, cost: .02},
+		{name: "seconds", log: model.Log{Other: `{"usage_facts":{"seconds":4}}`}, rule: model.PurchasePrice{Unit: "second", UnitPrice: ptr(.75)}, cost: 3},
+		{name: "missing usage", rule: model.PurchasePrice{Unit: "second", UnitPrice: ptr(.75)}, unknown: 1},
+		{name: "malformed metadata", log: model.Log{Other: `{bad`}, rule: model.PurchasePrice{Unit: "request", UnitPrice: ptr(1)}, unknown: 1},
+		{name: "pending task", log: model.Log{Other: `{"is_task":true,"task_id":"t"}`}, rule: model.PurchasePrice{Unit: "request", UnitPrice: ptr(1)}, unknown: 1, pending: 1},
+		{name: "success task", log: model.Log{Other: `{"is_task":true,"task_id":"t"}`}, rule: model.PurchasePrice{Unit: "request", UnitPrice: ptr(1)}, tasks: map[string]model.Task{"7/1/t": {Status: model.TaskStatusSuccess}}, cost: 1},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tc.log.Type, tc.log.ChannelId, tc.log.ModelName, tc.log.UserId, tc.log.Quota = model.LogTypeConsume, 7, "test", 1, 1000
+			tc.rule.ChannelID, tc.rule.Model = 7, "test"
+			report := model.CalculateRevenue([]model.Log{tc.log}, []model.PurchasePrice{tc.rule}, tc.tasks, 100)
+			assert.InDelta(t, tc.cost, report.KnownCost, 1e-10)
+			assert.Equal(t, tc.unknown, report.UncoveredEntries)
+			assert.Equal(t, tc.pending, report.PendingEntries)
+			if tc.unknown > 0 {
+				assert.Nil(t, report.GrossProfit)
+			} else {
+				require.NotNil(t, report.GrossProfit)
+				assert.InDelta(t, 10-tc.cost, *report.GrossProfit, 1e-10)
+			}
+		})
+	}
+}
