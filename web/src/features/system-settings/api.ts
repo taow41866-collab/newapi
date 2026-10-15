@@ -21,6 +21,7 @@ import { api } from '@/lib/api'
 import type {
   ConfirmPaymentComplianceResponse,
   FetchUpstreamRatiosRequest,
+  GroupSettingsValues,
   LogCleanupTask,
   SystemOptionsResponse,
   SystemTaskListResponse,
@@ -41,6 +42,13 @@ export async function getSystemOptions() {
 
 export async function updateSystemOption(request: UpdateOptionRequest) {
   const res = await api.put<UpdateOptionResponse>('/api/option/', request)
+  return res.data
+}
+
+export async function updateGroupSettings(values: GroupSettingsValues) {
+  const res = await api.put<UpdateOptionResponse>('/api/group/settings', {
+    values,
+  })
   return res.data
 }
 

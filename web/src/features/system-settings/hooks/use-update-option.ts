@@ -22,9 +22,19 @@ import { toast } from 'sonner'
 
 import { handleServerError } from '@/lib/handle-server-error'
 import { requireServerSuccess } from '@/lib/server-error-message'
+import { useAuthStore } from '@/stores/auth-store'
+import { useGroupDisplayNamesStore } from '@/stores/group-display-names-store'
 
-import { updatePasskeyDomains, updateSystemOption } from '../api'
-import type { UpdateOptionRequest, UpdatePasskeyDomainsRequest } from '../types'
+import {
+  updateGroupSettings,
+  updatePasskeyDomains,
+  updateSystemOption,
+} from '../api'
+import type {
+  GroupSettingsValues,
+  UpdateOptionRequest,
+  UpdatePasskeyDomainsRequest,
+} from '../types'
 
 // Configuration keys that require status refresh
 const STATUS_RELATED_KEYS = new Set([
@@ -51,12 +61,23 @@ export function useUpdateOption() {
   const queryClient = useQueryClient()
 
   return useMutation({
+    onMutate: () => ({ userId: useAuthStore.getState().auth.user?.id ?? null }),
     mutationFn: async (request: UpdateOptionRequest) =>
       requireServerSuccess(await updateSystemOption(request)),
-    onSuccess: (data, variables) => {
+    onSuccess: (data, variables, context) => {
       if (data.success) {
         // Always refresh system-options
         queryClient.invalidateQueries({ queryKey: ['system-options'] })
+        if (
+          variables.key === 'GroupDisplayNames' &&
+          context.userId !== null &&
+          context.userId === useAuthStore.getState().auth.user?.id
+        ) {
+          useGroupDisplayNamesStore
+            .getState()
+            .setNames(context.userId, JSON.parse(String(variables.value)))
+          queryClient.invalidateQueries({ queryKey: ['group-display-names'] })
+        }
 
         // If updating frontend-display-related config, also refresh status
         if (STATUS_RELATED_KEYS.has(variables.key)) {
@@ -101,6 +122,31 @@ export function useUpdatePasskeyDomains() {
       } catch {
         /* Storage may be disabled. */
       }
+      toast.success(i18next.t('Setting updated successfully'))
+    },
+    onError: (error: Error) =>
+      handleServerError(error, i18next.t('Failed to update setting')),
+  })
+}
+
+export function useUpdateGroupSettings() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    onMutate: () => ({ userId: useAuthStore.getState().auth.user?.id ?? null }),
+    mutationFn: async (values: GroupSettingsValues) =>
+      requireServerSuccess(await updateGroupSettings(values)),
+    onSuccess: (_result, values, context) => {
+      if (
+        values.GroupDisplayNames !== undefined &&
+        context.userId !== null &&
+        context.userId === useAuthStore.getState().auth.user?.id
+      ) {
+        useGroupDisplayNamesStore
+          .getState()
+          .setNames(context.userId, JSON.parse(values.GroupDisplayNames))
+      }
+      queryClient.invalidateQueries({ queryKey: ['system-options'] })
+      queryClient.invalidateQueries({ queryKey: ['group-display-names'] })
       toast.success(i18next.t('Setting updated successfully'))
     },
     onError: (error: Error) =>

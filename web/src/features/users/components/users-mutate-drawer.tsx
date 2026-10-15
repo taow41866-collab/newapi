@@ -63,6 +63,7 @@ import {
   SheetTitle,
 } from '@/components/ui/sheet'
 import { Textarea } from '@/components/ui/textarea'
+import { useGroupLabel } from '@/hooks/use-group-display-names'
 import {
   ADMIN_PERMISSION_ACTIONS,
   ADMIN_PERMISSION_RESOURCES,
@@ -112,6 +113,7 @@ export function UsersMutateDrawer({
   currentRow,
 }: UsersMutateDrawerProps) {
   const { t } = useTranslation()
+  const groupLabel = useGroupLabel()
   const isUpdate = !!currentRow
   const { triggerRefresh, requestVerification } = useUsers()
   const currentUser = useAuthStore((s) => s.auth.user)
@@ -427,7 +429,7 @@ export function UsersMutateDrawer({
                           <Combobox
                             options={groups.map((group) => ({
                               value: group,
-                              label: group,
+                              label: groupLabel(group),
                             }))}
                             onValueChange={field.onChange}
                             value={field.value}

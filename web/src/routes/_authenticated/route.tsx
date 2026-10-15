@@ -19,6 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 import { createFileRoute, redirect } from '@tanstack/react-router'
 
 import { AuthenticatedLayout } from '@/components/layout'
+import { useLoadGroupDisplayNames } from '@/hooks/use-group-display-names'
 import { resolveAuthentication } from '@/lib/auth-session'
 import { useAuthStore } from '@/stores/auth-store'
 
@@ -39,5 +40,10 @@ export const Route = createFileRoute('/_authenticated')({
       })
     }
   },
-  component: AuthenticatedLayout,
+  component: GroupNamesAuthenticatedLayout,
 })
+
+function GroupNamesAuthenticatedLayout() {
+  useLoadGroupDisplayNames()
+  return <AuthenticatedLayout />
+}

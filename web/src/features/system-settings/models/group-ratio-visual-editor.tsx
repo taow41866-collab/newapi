@@ -96,6 +96,9 @@ type GroupRatioVisualEditorProps = {
   onSectionChange: (section: GroupSettingsSection) => void
   defaultUseAutoGroupField: ReactNode
   groupRatio: string
+  groupDisplayNames?: string
+  savedGroupIds?: string[]
+  onPricingValidityChange?: (valid: boolean) => void
   topupGroupRatio: string
   userUsableGroups: string
   groupGroupRatio: string
@@ -108,6 +111,8 @@ type GroupRatioVisualEditorProps = {
 type GroupPricingRow = {
   _id: string
   name: string
+  displayName: string
+  persisted: boolean
   ratio: string
   topupRatio: string
   selectable: boolean
@@ -159,11 +164,13 @@ function parseNestedRatioMap(
 function buildGroupPricingRows(
   groupRatio: string,
   userUsableGroups: string,
-  topupGroupRatio: string
+  topupGroupRatio: string,
+  groupDisplayNames: string
 ): GroupPricingRow[] {
   const ratioMap = parseRatioMap(groupRatio)
   const usableMap = parseUsableMap(userUsableGroups)
   const topupMap = parseRatioMap(topupGroupRatio)
+  const displayNames = parseUsableMap(groupDisplayNames)
   const names = new Set([
     ...Object.keys(ratioMap),
     ...Object.keys(usableMap),
@@ -173,6 +180,8 @@ function buildGroupPricingRows(
   return [...names].map((name) => ({
     _id: createGroupPricingId(),
     name,
+    displayName: Object.hasOwn(displayNames, name) ? displayNames[name] : name,
+    persisted: true,
     ratio: String(normalizeRatio(ratioMap[name])),
     topupRatio: Object.hasOwn(topupMap, name) ? String(topupMap[name]) : '',
     selectable: Object.hasOwn(usableMap, name),
@@ -184,10 +193,15 @@ function serializeGroupPricingRows(rows: GroupPricingRow[]) {
   const groupRatio: Record<string, number> = {}
   const userUsableGroups: Record<string, string> = {}
   const topupGroupRatio: Record<string, number> = {}
+  const groupDisplayNames: Record<string, string> = Object.create(null)
 
   for (const row of rows) {
     const name = row.name.trim()
     if (!name) continue
+    const displayName = row.displayName.trim()
+    if (displayName && displayName !== name) {
+      groupDisplayNames[name] = displayName
+    }
     groupRatio[name] = normalizeRatio(row.ratio)
     if (row.selectable) {
       userUsableGroups[name] = row.description
@@ -199,6 +213,7 @@ function serializeGroupPricingRows(rows: GroupPricingRow[]) {
   }
 
   return {
+    GroupDisplayNames: JSON.stringify(groupDisplayNames, null, 2),
     GroupRatio: JSON.stringify(groupRatio, null, 2),
     UserUsableGroups: JSON.stringify(userUsableGroups, null, 2),
     TopupGroupRatio: JSON.stringify(topupGroupRatio, null, 2),
@@ -208,6 +223,7 @@ function serializeGroupPricingRows(rows: GroupPricingRow[]) {
 function groupPricingSignature(rows: GroupPricingRow[]): string {
   const serialized = serializeGroupPricingRows(rows)
   return JSON.stringify({
+    groupDisplayNames: parseUsableMap(serialized.GroupDisplayNames),
     groupRatio: parseRatioMap(serialized.GroupRatio),
     userUsableGroups: parseUsableMap(serialized.UserUsableGroups),
     topupGroupRatio: parseRatioMap(serialized.TopupGroupRatio),
@@ -217,9 +233,11 @@ function groupPricingSignature(rows: GroupPricingRow[]): string {
 function sourceGroupPricingSignature(
   groupRatio: string,
   userUsableGroups: string,
-  topupGroupRatio: string
+  topupGroupRatio: string,
+  groupDisplayNames: string
 ): string {
   return JSON.stringify({
+    groupDisplayNames: parseUsableMap(groupDisplayNames),
     groupRatio: parseRatioMap(groupRatio),
     userUsableGroups: parseUsableMap(userUsableGroups),
     topupGroupRatio: parseRatioMap(topupGroupRatio),
@@ -271,6 +289,9 @@ export const GroupRatioVisualEditor = memo(function GroupRatioVisualEditor({
   onSectionChange,
   defaultUseAutoGroupField,
   groupRatio,
+  groupDisplayNames = '{}',
+  savedGroupIds,
+  onPricingValidityChange,
   topupGroupRatio,
   userUsableGroups,
   groupGroupRatio,
@@ -367,6 +388,9 @@ export const GroupRatioVisualEditor = memo(function GroupRatioVisualEditor({
       </div>
       <TabsContent value='pricing' keepMounted>
         <GroupPricingTable
+          groupDisplayNames={groupDisplayNames}
+          savedGroupIds={savedGroupIds ?? registryNames}
+          onValidityChange={onPricingValidityChange}
           groupRatio={groupRatio}
           userUsableGroups={userUsableGroups}
           topupGroupRatio={topupGroupRatio}
@@ -472,6 +496,9 @@ export const GroupRatioVisualEditor = memo(function GroupRatioVisualEditor({
 })
 
 type GroupPricingTableProps = {
+  onValidityChange?: (valid: boolean) => void
+  groupDisplayNames: string
+  savedGroupIds: string[]
   groupRatio: string
   userUsableGroups: string
   topupGroupRatio: string
@@ -480,6 +507,9 @@ type GroupPricingTableProps = {
 }
 
 function GroupPricingTable({
+  onValidityChange,
+  groupDisplayNames,
+  savedGroupIds,
   groupRatio,
   userUsableGroups,
   topupGroupRatio,
@@ -489,14 +519,20 @@ function GroupPricingTable({
   const { t } = useTranslation()
   const [search, setSearch] = useState('')
   const [rows, setRows] = useState<GroupPricingRow[]>(() =>
-    buildGroupPricingRows(groupRatio, userUsableGroups, topupGroupRatio)
+    buildGroupPricingRows(
+      groupRatio,
+      userUsableGroups,
+      topupGroupRatio,
+      groupDisplayNames
+    )
   )
 
   useEffect(() => {
     const incomingSignature = sourceGroupPricingSignature(
       groupRatio,
       userUsableGroups,
-      topupGroupRatio
+      topupGroupRatio,
+      groupDisplayNames
     )
     setRows((currentRows) => {
       if (groupPricingSignature(currentRows) === incomingSignature) {
@@ -505,15 +541,17 @@ function GroupPricingTable({
       return buildGroupPricingRows(
         groupRatio,
         userUsableGroups,
-        topupGroupRatio
+        topupGroupRatio,
+        groupDisplayNames
       )
     })
-  }, [groupRatio, userUsableGroups, topupGroupRatio])
+  }, [groupRatio, userUsableGroups, topupGroupRatio, groupDisplayNames])
 
   const emitRows = useCallback(
     (nextRows: GroupPricingRow[]) => {
       setRows(nextRows)
       const serialized = serializeGroupPricingRows(nextRows)
+      onChange('GroupDisplayNames', serialized.GroupDisplayNames)
       onChange('GroupRatio', serialized.GroupRatio)
       onChange('UserUsableGroups', serialized.UserUsableGroups)
       onChange('TopupGroupRatio', serialized.TopupGroupRatio)
@@ -548,6 +586,8 @@ function GroupPricingTable({
       {
         _id: createGroupPricingId(),
         name,
+        displayName: '',
+        persisted: false,
         ratio: '1',
         topupRatio: '',
         selectable: true,
@@ -574,12 +614,18 @@ function GroupPricingTable({
       .filter(([, count]) => count > 1)
       .map(([name]) => name)
   }, [rows])
+  useEffect(() => {
+    onValidityChange?.(
+      duplicateNames.length === 0 && rows.every((row) => !!row.name.trim())
+    )
+  }, [duplicateNames, rows, onValidityChange])
 
   const query = search.trim().toLowerCase()
   const visibleRows = rows.filter(
     (row) =>
       !query ||
       row.name.toLowerCase().includes(query) ||
+      row.displayName.toLowerCase().includes(query) ||
       row.description.toLowerCase().includes(query)
   )
 
@@ -593,6 +639,11 @@ function GroupPricingTable({
               {t(
                 'All group names live here. Ratio applies when calls are billed as this group; top-up ratio applies to users whose account is in this group.'
               )}
+              <span className='mt-1 block'>
+                {t(
+                  'Group identifiers stay fixed. Display names can be changed without changing routing or billing.'
+                )}
+              </span>
             </CardDescription>
           </div>
           <Button onClick={addRow} size='sm' className='sm:self-start'>
@@ -658,14 +709,35 @@ function GroupPricingTable({
                 header: t('Group name'),
                 className: 'min-w-40',
                 cell: (row) => (
-                  <Input
-                    value={row.name}
-                    aria-label={t('Group name')}
-                    onChange={(event) =>
-                      updateRow(row._id, 'name', event.target.value)
-                    }
-                    aria-invalid={duplicateNames.includes(row.name.trim())}
-                  />
+                  <div className='space-y-1.5'>
+                    <Input
+                      value={row.displayName}
+                      placeholder={row.name}
+                      aria-label={t('Group name')}
+                      onChange={(event) =>
+                        updateRow(row._id, 'displayName', event.target.value)
+                      }
+                    />
+                    {row.persisted ||
+                    (savedGroupIds.includes(row.name) &&
+                      !duplicateNames.includes(row.name.trim())) ? (
+                      <code className='text-muted-foreground text-xs'>
+                        {row.name}
+                      </code>
+                    ) : (
+                      <Input
+                        value={row.name}
+                        aria-label={t('Group identifier')}
+                        onChange={(event) =>
+                          updateRow(row._id, 'name', event.target.value)
+                        }
+                        aria-invalid={
+                          !row.name.trim() ||
+                          duplicateNames.includes(row.name.trim())
+                        }
+                      />
+                    )}
+                  </div>
                 ),
               },
               {

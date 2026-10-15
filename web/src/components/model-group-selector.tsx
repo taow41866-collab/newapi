@@ -59,6 +59,7 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from '@/components/ui/popover'
+import { useGroupLabel } from '@/hooks/use-group-display-names'
 import { useIsMobile } from '@/hooks/use-mobile'
 import { cn } from '@/lib/utils'
 
@@ -370,8 +371,23 @@ ModelSelector.displayName = 'ModelSelector'
  * Styled following Scira's form-component design patterns
  */
 export const GroupSelector: React.FC<GroupSelectorProps> = React.memo(
-  ({ selectedGroup, groups, onGroupChange, className, disabled = false }) => {
+  ({
+    selectedGroup,
+    groups: rawGroups,
+    onGroupChange,
+    className,
+    disabled = false,
+  }) => {
     const { t } = useTranslation()
+    const groupLabel = useGroupLabel()
+    const groups = useMemo(
+      () =>
+        rawGroups.map((group) => ({
+          ...group,
+          label: groupLabel(group.value, group.label),
+        })),
+      [rawGroups, groupLabel]
+    )
     const [open, setOpen] = useState(false)
     const isMobile = useIsMobile()
 
@@ -579,12 +595,21 @@ export const ModelGroupSelector: React.FC<ModelGroupSelectorProps> = ({
   models,
   onModelChange,
   selectedGroup,
-  groups,
+  groups: rawGroups,
   onGroupChange,
   className,
   disabled = false,
 }) => {
   const { t } = useTranslation()
+  const groupLabel = useGroupLabel()
+  const groups = useMemo(
+    () =>
+      rawGroups.map((group) => ({
+        ...group,
+        label: groupLabel(group.value, group.label),
+      })),
+    [rawGroups, groupLabel]
+  )
   const [open, setOpen] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
   const isMobile = useIsMobile()

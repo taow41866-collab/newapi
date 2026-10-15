@@ -43,6 +43,7 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip'
 import { useMediaQuery } from '@/hooks'
+import { useGroupLabel } from '@/hooks/use-group-display-names'
 import { useTableUrlState } from '@/hooks/use-table-url-state'
 import { requireServerSuccess } from '@/lib/server-error-message'
 import { cn } from '@/lib/utils'
@@ -90,6 +91,7 @@ function isDisabledChannelRow(channel: Channel) {
 
 export function ChannelsTable() {
   const { t } = useTranslation()
+  const groupLabel = useGroupLabel()
   const {
     enableTagMode,
     idSort,
@@ -213,10 +215,10 @@ export function ChannelsTable() {
   const groupOptions = useMemo(
     () =>
       (groupsData?.data || []).map((g) => ({
-        label: g,
+        label: groupLabel(g),
         value: g,
       })),
-    [groupsData]
+    [groupsData, groupLabel]
   )
 
   // Fetch channels data

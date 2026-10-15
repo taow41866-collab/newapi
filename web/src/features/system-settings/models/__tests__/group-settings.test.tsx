@@ -35,6 +35,7 @@ import { positiveIntegerSchema } from '../../utils/numeric-field'
 import { GroupRatioForm } from '../group-ratio-form'
 
 const defaults = {
+  GroupDisplayNames: '{}',
   GroupRatio: '{"default":1,"vip":0.8}',
   TopupGroupRatio: '{"vip":1.2}',
   UserUsableGroups: '{"default":"Standard access","vip":"Premium access"}',
@@ -46,6 +47,7 @@ const defaults = {
 }
 
 const schema = z.object({
+  GroupDisplayNames: z.string(),
   GroupRatio: z.string(),
   TopupGroupRatio: z.string(),
   UserUsableGroups: z.string(),
@@ -79,6 +81,116 @@ function Fixture(props: {
 }
 
 describe('group settings workspace', () => {
+  it('rejects a display name that collides with another group identifier', async () => {
+    const user = userEvent.setup()
+    const onSave = vi.fn(async (_values: typeof defaults) => {})
+    render(<Fixture onSave={onSave} />)
+    const name = screen.getAllByRole('textbox', { name: 'Group name' })[1]
+    await user.clear(name)
+    await user.type(name, 'default')
+    await user.click(
+      screen.getByRole('button', { name: 'Save group settings' })
+    )
+    expect(onSave).not.toHaveBeenCalled()
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Group display names must be unique and must not match another group identifier'
+    )
+  })
+
+  it('lets a new group choose an identifier without exposing identifier edits for saved groups', async () => {
+    const user = userEvent.setup()
+    const onSave = vi.fn(async (_values: typeof defaults) => {})
+    render(<Fixture onSave={onSave} />)
+    expect(
+      screen.queryByRole('textbox', { name: 'Group identifier' })
+    ).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Add group' }))
+    const identifier = screen.getByRole('textbox', { name: 'Group identifier' })
+    await user.clear(identifier)
+    await user.type(identifier, 'enterprise')
+    await user.type(
+      screen.getAllByRole('textbox', { name: 'Group name' })[2],
+      'Enterprise'
+    )
+    await user.click(
+      screen.getByRole('button', { name: 'Save group settings' })
+    )
+    await waitFor(() => expect(onSave).toHaveBeenCalledOnce())
+    expect(JSON.parse(onSave.mock.calls[0][0].GroupRatio)).toHaveProperty(
+      'enterprise',
+      1
+    )
+    expect(JSON.parse(onSave.mock.calls[0][0].GroupDisplayNames)).toEqual({
+      enterprise: 'Enterprise',
+    })
+  })
+
+  it('blocks duplicate new identifiers instead of overwriting an existing group', async () => {
+    const user = userEvent.setup()
+    const onSave = vi.fn(async (_values: typeof defaults) => {})
+    render(<Fixture onSave={onSave} />)
+    await user.click(screen.getByRole('button', { name: 'Add group' }))
+    const identifier = screen.getByRole('textbox', { name: 'Group identifier' })
+    await user.clear(identifier)
+    await user.type(identifier, 'vip')
+    expect(identifier).toHaveAttribute('aria-invalid', 'true')
+    expect(
+      screen.getByRole('button', { name: 'Save group settings' })
+    ).toBeDisabled()
+    expect(onSave).not.toHaveBeenCalled()
+    await user.clear(identifier)
+    await user.type(identifier, 'enterprise')
+    expect(
+      screen.getByRole('button', { name: 'Save group settings' })
+    ).toBeEnabled()
+  })
+
+  it('retains a rejected display name edit and allows retry', async () => {
+    const user = userEvent.setup()
+    const onSave = vi
+      .fn<(values: typeof defaults) => Promise<void>>()
+      .mockRejectedValueOnce(new Error('Server rejected update'))
+      .mockResolvedValueOnce(undefined)
+    render(<Fixture onSave={onSave} />)
+    const name = screen.getAllByRole('textbox', { name: 'Group name' })[1]
+    await user.clear(name)
+    await user.type(name, 'Premium')
+    await user.click(
+      screen.getByRole('button', { name: 'Save group settings' })
+    )
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Server rejected update'
+    )
+    expect(name).toHaveValue('Premium')
+    await user.click(
+      screen.getByRole('button', { name: 'Save group settings' })
+    )
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(2))
+    expect(JSON.parse(onSave.mock.calls[1][0].GroupDisplayNames)).toEqual({
+      vip: 'Premium',
+    })
+  })
+
+  it('saves a display name while retaining the existing group identifier and rules', async () => {
+    const user = userEvent.setup()
+    const onSave = vi.fn(async (_values: typeof defaults) => {})
+    render(<Fixture onSave={onSave} />)
+    const name = screen.getAllByRole('textbox', { name: 'Group name' })[1]
+    await user.clear(name)
+    await user.type(name, 'Premium')
+    await user.click(
+      screen.getByRole('button', { name: 'Save group settings' })
+    )
+    await waitFor(() => expect(onSave).toHaveBeenCalledOnce())
+    const saved = onSave.mock.calls[0][0]
+    expect(JSON.parse(saved.GroupDisplayNames)).toEqual({ vip: 'Premium' })
+    expect(JSON.parse(saved.GroupRatio)).toEqual({ default: 1, vip: 0.8 })
+    expect(JSON.parse(saved.UserUsableGroups)).toHaveProperty('vip')
+    expect(JSON.parse(saved.TopupGroupRatio)).toEqual({ vip: 1.2 })
+    expect(JSON.parse(saved.AutoGroups)).toEqual(['default', 'vip'])
+    expect(screen.getByText('vip', { selector: 'code' })).toBeVisible()
+  })
+
   it('filters by description and clears search without discarding edits', async () => {
     const user = userEvent.setup()
     render(<Fixture />)
@@ -162,7 +274,9 @@ describe('group settings workspace', () => {
     expect(screen.getByRole('button', { name: 'Move vip up' })).toBeDisabled()
     expect(screen.getByRole('button', { name: 'Move vip down' })).toBeDisabled()
     await user.click(screen.getByRole('tab', { name: 'Pricing groups' }))
-    await user.click(screen.getByRole('button', { name: 'Save group settings' }))
+    await user.click(
+      screen.getByRole('button', { name: 'Save group settings' })
+    )
     await waitFor(() => expect(onSave).toHaveBeenCalled())
     expect(onSave.mock.calls[0]?.[0]).toEqual(
       expect.objectContaining({
@@ -205,7 +319,9 @@ describe('group settings workspace', () => {
     )
     expect(screen.getByText('Not in pricing table')).toBeVisible()
     await user.click(screen.getByRole('tab', { name: 'Pricing groups' }))
-    await user.click(screen.getByRole('button', { name: 'Save group settings' }))
+    await user.click(
+      screen.getByRole('button', { name: 'Save group settings' })
+    )
     await waitFor(() => expect(onSave).toHaveBeenCalled())
     expect(JSON.parse(onSave.mock.calls[0][0].AutoGroups)).toEqual([
       'vip',
@@ -247,7 +363,9 @@ describe('group settings workspace', () => {
       { target: { value: '0' } }
     )
     await user.click(screen.getByRole('tab', { name: 'Pricing groups' }))
-    await user.click(screen.getByRole('button', { name: 'Save group settings' }))
+    await user.click(
+      screen.getByRole('button', { name: 'Save group settings' })
+    )
     await waitFor(() =>
       expect(
         screen.getByRole('tab', { name: 'Auto group order' })

@@ -365,9 +365,10 @@ func SetApiRouter(router *gin.Engine) {
 			logRoute.GET("/token", middleware.TokenAuthReadOnly(), controller.GetLogByKey)
 		}
 		groupRoute := apiRouter.Group("/group")
-		groupRoute.Use(middleware.AdminAuth())
 		{
-			groupRoute.GET("/", controller.GetGroups)
+			groupRoute.GET("/", middleware.AdminAuth(), controller.GetGroups)
+			groupRoute.GET("/display-names", middleware.UserAuth(), controller.GetGroupDisplayNames)
+			groupRoute.PUT("/settings", middleware.RootAuth(), controller.UpdateGroupSettings)
 		}
 
 		prefillGroupRoute := apiRouter.Group("/prefill_group")

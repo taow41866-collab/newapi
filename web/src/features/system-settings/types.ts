@@ -34,6 +34,13 @@ export type UpdateOptionRequest = {
   value: string | boolean | number
 }
 
+export type GroupSettingsValues = Partial<{
+  GroupRatio: string
+  UserUsableGroups: string
+  TopupGroupRatio: string
+  GroupDisplayNames: string
+}>
+
 export type UpdateOptionResponse = {
   success: boolean
   message: string
@@ -259,6 +266,7 @@ export type ModelSettings = {
   'billing_setting.plugin_billing_expr': string
   'tool_price_setting.prices': string
   TopupGroupRatio: string
+  GroupDisplayNames: string
   GroupRatio: string
   UserUsableGroups: string
   GroupGroupRatio: string
@@ -299,6 +307,7 @@ export type BillingSettings = {
   'billing_setting.plugin_billing_expr': string
   'tool_price_setting.prices': string
   TopupGroupRatio: string
+  GroupDisplayNames: string
   GroupRatio: string
   UserUsableGroups: string
   GroupGroupRatio: string

@@ -1,6 +1,7 @@
 package model
 
 import (
+	"fmt"
 	"maps"
 	"strconv"
 	"strings"
@@ -154,6 +155,7 @@ func InitOptionMap() {
 	common.OptionMap["CacheRatio"] = ratio_setting.CacheRatio2JSONString()
 	common.OptionMap["CreateCacheRatio"] = ratio_setting.CreateCacheRatio2JSONString()
 	common.OptionMap["GroupRatio"] = ratio_setting.GroupRatio2JSONString()
+	common.OptionMap["GroupDisplayNames"] = setting.GroupDisplayNames2JSONString()
 	common.OptionMap["GroupGroupRatio"] = ratio_setting.GroupGroupRatio2JSONString()
 	common.OptionMap["UserUsableGroups"] = setting.UserUsableGroups2JSONString()
 	common.OptionMap["CompletionRatio"] = ratio_setting.CompletionRatio2JSONString()
@@ -195,6 +197,8 @@ func InitOptionMap() {
 }
 
 func loadOptionsFromDatabase() {
+	groupSettingsOptionMutex.Lock()
+	defer groupSettingsOptionMutex.Unlock()
 	requestPolicyOptionMutex.Lock()
 	defer requestPolicyOptionMutex.Unlock()
 	defer func() {
@@ -205,8 +209,22 @@ func loadOptionsFromDatabase() {
 	passkeyOptionMutex.Lock()
 	defer passkeyOptionMutex.Unlock()
 	options, _ := AllOption()
+	// Older installations could persist divergent aliases. Resolve them before
+	// publishing either value so row order cannot change routing identities.
+	var groupRatio string
+	var hasGroupRatio bool
+	for _, key := range []string{"group_ratio_setting.group_ratio", "GroupRatio"} {
+		for _, option := range options {
+			if option.Key == key {
+				groupRatio, hasGroupRatio = option.Value, true
+			}
+		}
+	}
 	passkeyOptions := make(map[string]string)
 	for _, option := range options {
+		if option.Key == "GroupRatio" || option.Key == "group_ratio_setting.group_ratio" {
+			continue
+		}
 		if IsPasskeyDomainOption(option.Key) {
 			passkeyOptions[option.Key] = option.Value
 			continue
@@ -214,6 +232,13 @@ func loadOptionsFromDatabase() {
 		err := updateOptionMap(option.Key, option.Value)
 		if err != nil {
 			common.SysLog("failed to update option map: " + err.Error())
+		}
+	}
+	if hasGroupRatio {
+		for _, key := range []string{"GroupRatio", "group_ratio_setting.group_ratio"} {
+			if err := updateOptionMap(key, groupRatio); err != nil {
+				common.SysLog("failed to update group ratios: " + err.Error())
+			}
 		}
 	}
 	applyPasskeyDomainOptions(passkeyOptions)
@@ -247,6 +272,9 @@ func validateOptionValue(key string, value string) error {
 }
 
 func UpdateOption(key string, value string) error {
+	if isGroupIdentityOption(key) {
+		return UpdateOptionsBulk(map[string]string{key: value})
+	}
 	if IsRequestPolicyOption(key) {
 		return UpdateRequestPolicyOptions(map[string]string{key: value})
 	}
@@ -284,8 +312,24 @@ func UpdateOptionsBulk(values map[string]string) error {
 	if len(values) == 0 {
 		return nil
 	}
+	groupIdentityChanged := false
+	for key := range values {
+		groupIdentityChanged = groupIdentityChanged || isGroupIdentityOption(key)
+	}
+	if groupIdentityChanged {
+		groupSettingsOptionMutex.Lock()
+		defer groupSettingsOptionMutex.Unlock()
+		var err error
+		values, err = normalizeGroupIdentityOptions(values)
+		if err != nil {
+			return err
+		}
+	}
 	for key := range values {
 		if IsPasskeyDomainOption(key) {
+			if groupIdentityChanged {
+				return fmt.Errorf("group and passkey options must be saved separately")
+			}
 			_, err := UpdatePasskeyDomainOptions(values, false, "")
 			return err
 		}
@@ -316,6 +360,11 @@ func UpdateOptionsBulk(values map[string]string) error {
 	}
 
 	err := DB.Transaction(func(tx *gorm.DB) error {
+		if groupIdentityChanged {
+			if err := validateGroupIdentityOptions(tx, values); err != nil {
+				return err
+			}
+		}
 		for k, v := range values {
 			option := Option{Key: k}
 			if err := tx.FirstOrCreate(&option, Option{Key: k}).Error; err != nil {
@@ -636,6 +685,8 @@ func updateOptionMap(key string, value string) (err error) {
 		err = ratio_setting.UpdateModelRatioByJSONString(value)
 	case "GroupRatio":
 		err = ratio_setting.UpdateGroupRatioByJSONString(value)
+	case "GroupDisplayNames":
+		err = setting.UpdateGroupDisplayNamesByJSONString(value)
 	case "GroupGroupRatio":
 		err = ratio_setting.UpdateGroupGroupRatioByJSONString(value)
 	case "UserUsableGroups":

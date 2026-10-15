@@ -35,6 +35,7 @@ import {
   PopoverTrigger,
 } from '@/components/ui/popover'
 import { useMediaQuery } from '@/hooks'
+import { useGroupLabel } from '@/hooks/use-group-display-names'
 import { cn } from '@/lib/utils'
 
 import {
@@ -59,13 +60,22 @@ type ApiKeyGroupComboboxProps = {
 }
 
 export function ApiKeyGroupCombobox({
-  options,
+  options: rawOptions,
   value,
   onValueChange,
   placeholder,
   disabled,
 }: ApiKeyGroupComboboxProps) {
   const { t } = useTranslation()
+  const groupLabel = useGroupLabel()
+  const options = useMemo(
+    () =>
+      rawOptions.map((option) => ({
+        ...option,
+        label: groupLabel(option.value, option.label),
+      })),
+    [rawOptions, groupLabel]
+  )
   const [open, setOpen] = useState(false)
   const [searchValue, setSearchValue] = useState('')
   const shouldReduceMotion = useMediaQuery('(prefers-reduced-motion: reduce)')

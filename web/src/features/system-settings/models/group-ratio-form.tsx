@@ -18,7 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { Code2, Eye, HelpCircle } from 'lucide-react'
 import { memo, useCallback, useState, type ReactNode } from 'react'
-import { useWatch, type UseFormReturn } from 'react-hook-form'
+import { useFormState, useWatch, type UseFormReturn } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 
 import {
@@ -59,6 +59,7 @@ import {
   SettingsSwitchItem,
 } from '../components/settings-form-layout'
 import { SettingsPageActionsPortal } from '../components/settings-page-context'
+import { safeJsonParse } from '../utils/json-parser'
 import { safeNumberFieldProps } from '../utils/numeric-field'
 import {
   GroupRatioVisualEditor,
@@ -66,6 +67,7 @@ import {
 } from './group-ratio-visual-editor'
 
 type GroupFormValues = {
+  GroupDisplayNames: string
   GroupRatio: string
   TopupGroupRatio: string
   UserUsableGroups: string
@@ -89,9 +91,56 @@ export const GroupRatioForm = memo(function GroupRatioForm({
 }: GroupRatioFormProps) {
   const { t } = useTranslation()
   const values = useWatch({ control: form.control })
+  const { errors, defaultValues } = useFormState({ control: form.control })
+  const [pricingValid, setPricingValid] = useState(true)
   const [editMode, setEditMode] = useState<'visual' | 'json'>('visual')
   const [guideOpen, setGuideOpen] = useState(false)
   const [section, setSection] = useState<GroupSettingsSection>('pricing')
+
+  const handleSave = async (nextValues: GroupFormValues) => {
+    const names = safeJsonParse<Record<string, string>>(
+      nextValues.GroupDisplayNames,
+      { fallback: {}, silent: true }
+    )
+    const ids = Object.keys(
+      safeJsonParse<Record<string, number>>(nextValues.GroupRatio, {
+        fallback: {},
+        silent: true,
+      })
+    )
+    const displayName = (id: string) =>
+      Object.hasOwn(names, id) && typeof names[id] === 'string'
+        ? names[id].trim()
+        : ''
+    const labels = ids.map((id) => displayName(id) || id)
+    const conflicting =
+      new Set(labels).size !== labels.length ||
+      ids.some(
+        (id) =>
+          displayName(id) &&
+          ids.some((otherId) => otherId !== id && otherId === displayName(id))
+      )
+    if (conflicting) {
+      form.setError('GroupDisplayNames', {
+        message: t(
+          'Group display names must be unique and must not match another group identifier'
+        ),
+      })
+      return
+    }
+    form.clearErrors('GroupDisplayNames')
+    form.clearErrors('root')
+    try {
+      await onSave(nextValues)
+    } catch (error) {
+      form.setError('root', {
+        message:
+          error instanceof Error
+            ? error.message
+            : t('Failed to update setting'),
+      })
+    }
+  }
 
   const handleFieldChange = useCallback(
     (field: keyof GroupFormValues, value: string) => {
@@ -151,20 +200,48 @@ export const GroupRatioForm = memo(function GroupRatioForm({
           <Button
             type='button'
             size='sm'
-            onClick={form.handleSubmit(onSave, (errors) => {
+            onClick={form.handleSubmit(handleSave, (errors) => {
               if (errors.MaxTokenAutoGroups) {
                 setEditMode('visual')
                 setSection('auto')
                 requestAnimationFrame(() => form.setFocus('MaxTokenAutoGroups'))
               }
             })}
-            disabled={isSaving}
+            disabled={isSaving || (editMode === 'visual' && !pricingValid)}
           >
             {isSaving ? t('Saving...') : t('Save group settings')}
           </Button>
         </SettingsPageActionsPortal>
+        {errors.root && (
+          <p role='alert' className='text-destructive text-sm'>
+            {errors.root.message}
+          </p>
+        )}
+        {errors.GroupDisplayNames && editMode === 'visual' && (
+          <p role='alert' className='text-destructive text-sm'>
+            {errors.GroupDisplayNames.message}
+          </p>
+        )}
         {editMode === 'visual' ? (
           <GroupRatioVisualEditor
+            groupDisplayNames={values.GroupDisplayNames ?? '{}'}
+            onPricingValidityChange={setPricingValid}
+            savedGroupIds={[
+              ...new Set(
+                ['GroupRatio', 'TopupGroupRatio', 'UserUsableGroups'].flatMap(
+                  (field) =>
+                    Object.keys(
+                      safeJsonParse<Record<string, unknown>>(
+                        String(
+                          defaultValues?.[field as keyof GroupFormValues] ||
+                            '{}'
+                        ),
+                        { fallback: {}, silent: true }
+                      )
+                    )
+                )
+              ),
+            ]}
             section={section}
             onSectionChange={setSection}
             groupRatio={values.GroupRatio ?? ''}
@@ -230,7 +307,31 @@ export const GroupRatioForm = memo(function GroupRatioForm({
             }
           />
         ) : (
-          <SettingsForm onSubmit={form.handleSubmit(onSave)}>
+          <SettingsForm onSubmit={form.handleSubmit(handleSave)}>
+            <FormField
+              control={form.control}
+              name='GroupDisplayNames'
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>{t('Group display names')}</FormLabel>
+                  <FormControl>
+                    <JsonCodeEditor
+                      value={field.value}
+                      onChange={field.onChange}
+                      name={field.name}
+                      onBlur={field.onBlur}
+                      textareaRef={field.ref}
+                    />
+                  </FormControl>
+                  <FormDescription>
+                    {t(
+                      'Group identifiers stay fixed. Display names can be changed without changing routing or billing.'
+                    )}
+                  </FormDescription>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
             <FormField
               control={form.control}
               name='GroupRatio'
